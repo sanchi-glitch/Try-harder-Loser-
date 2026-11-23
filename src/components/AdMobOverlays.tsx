@@ -109,6 +109,7 @@ function DevTestAdDialog({ session }: { session: DevTestAdSession }) {
   }, [session, totalSeconds]);
 
   const isRewarded = session.format === 'rewarded';
+  const isHintReward = isRewarded && session.purpose === 'hint';
 
   return (
     <div
@@ -124,7 +125,11 @@ function DevTestAdDialog({ session }: { session: DevTestAdSession }) {
               GOOGLE TEST AD
             </span>
             <span className="text-xs font-mono-tabular text-[#D6D1C7] uppercase">
-              {isRewarded ? 'Rewarded Video' : 'Interstitial'}
+              {isHintReward
+                ? 'Rewarded Video · Hint'
+                : isRewarded
+                  ? 'Rewarded Video'
+                  : 'Interstitial'}
             </span>
           </div>
 
@@ -155,7 +160,7 @@ function DevTestAdDialog({ session }: { session: DevTestAdSession }) {
               {completed ? (
                 <>
                   <CheckCircle2 className="w-3.5 h-3.5" />
-                  Claim +1 Extra Life
+                  {isHintReward ? 'Unlock Cryptic Hint' : 'Claim +1 Extra Life'}
                 </>
               ) : (
                 <>
@@ -171,16 +176,20 @@ function DevTestAdDialog({ session }: { session: DevTestAdSession }) {
           <div className="font-display font-extrabold text-xl tracking-tight">
             {isRewarded
               ? completed
-                ? 'Reward Earned: +1 Extra Life'
+                ? isHintReward
+                  ? 'Reward Earned: Cryptic Hint Unlocked'
+                  : 'Reward Earned: +1 Extra Life'
                 : `Watching Rewarded Test Ad (${secondsLeft}s)...`
               : completed
                 ? 'Level Transition Interstitial Complete'
                 : `Interstitial Test Ad (${secondsLeft}s)...`}
           </div>
           <p className="text-xs text-[#D6D1C7] max-w-md mx-auto leading-relaxed">
-            {isRewarded
-              ? 'Verifies Google AdMob rewarded callback gating: skipping early grants 0 lives; completing grants exactly 1 extra life.'
-              : 'Shown naturally after completing a level and before starting the next level.'}
+            {isHintReward
+              ? 'Verifies Google AdMob rewarded callback gating: skipping early reveals nothing; completing unlocks this obstacle’s cryptic clue.'
+              : isRewarded
+                ? 'Verifies Google AdMob rewarded callback gating: skipping early grants 0 lives; completing grants exactly 1 extra life.'
+                : 'Shown naturally after completing a level and before starting the next level.'}
           </p>
 
           <div className="mt-3 p-3 rounded-lg bg-[#111111] border border-[#F5F3EE]/12 text-left font-mono-tabular text-[10px] text-[#D6D1C7] space-y-1">
@@ -197,7 +206,11 @@ function DevTestAdDialog({ session }: { session: DevTestAdSession }) {
           {isRewarded && !completed && (
             <div className="inline-flex items-center gap-1.5 text-[11px] text-[#F59E0B] pt-1">
               <ShieldAlert className="w-3.5 h-3.5" />
-              <span>Closing now skips the ad and awards NO extra life.</span>
+              <span>
+                {isHintReward
+                  ? 'Closing now skips the ad and reveals NO hint.'
+                  : 'Closing now skips the ad and awards NO extra life.'}
+              </span>
             </div>
           )}
         </div>

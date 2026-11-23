@@ -5,11 +5,14 @@ import {
   Grid,
   Heart,
   Home,
+  Lightbulb,
   Menu,
+  Play,
   RotateCcw,
   Skull,
   Volume2,
   VolumeX,
+  X,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import {
@@ -17,8 +20,10 @@ import {
   pickDeathStreakStickmanComment,
   type DeathStreakMilestone,
 } from '../data/deathMessages';
+import { HINT_SYSTEM_MAX_LEVEL } from '../data/hintClues';
 import { LEVELS } from '../data/levels';
 import { getRandomDeathTaunt } from '../data/taunts';
+import { adMobService } from '../engine/adMobService';
 import { audioManager } from '../engine/audio';
 import { PlatformerEngine } from '../engine/gameEngine';
 import { formatTimeMs } from '../engine/saveManager';
@@ -44,6 +49,7 @@ interface GameCanvasProps {
     jumpsUsed: number;
     tricksTriggeredInLevel: number;
   }) => void;
+  onHintAdStateChange?: (active: boolean) => void;
   restartToken: number;
   deathAction: { id: number; type: 'respawn_exact' | 'restart_after_death' };
 }
@@ -62,6 +68,7 @@ export function GameCanvas({
   onDeathScreenOpen,
   onTrickTriggered,
   onLevelComplete,
+  onHintAdStateChange,
   restartToken,
   deathAction,
 }: GameCanvasProps) {
@@ -104,7 +111,79 @@ export function GameCanvas({
     prankBanner: null,
     prankBannerId: 0,
     adaptiveHint: null,
+    obstacleHint: null,
   });
+
+  // Levels 1–30 Rewarded-Ad-Gated Hint State (unlocked strictly after verified rewarded ad completion)
+  const [unlockedHintKeys, setUnlockedHintKeys] = useState<string[]>([]);
+  const [dismissedHintKeys, setDismissedHintKeys] = useState<string[]>([]);
+  const [hintAdLoading, setHintAdLoading] = useState(false);
+  const [hintAdNotice, setHintAdNotice] = useState<string | null>(null);
+  const [hintNotifyBurstId, setHintNotifyBurstId] = useState(0);
+  const lastAvailableHintKeyRef = useRef<string | null>(null);
+  const hintNoticeTimerRef = useRef<number | null>(null);
+
+  const activeLockedHintKey =
+    !paused &&
+    hud.levelId >= 1 &&
+    hud.levelId <= HINT_SYSTEM_MAX_LEVEL &&
+    (hud.levelDeaths > 0 || hud.levelDeathStreak > 0) &&
+    hud.obstacleHint &&
+    !unlockedHintKeys.includes(hud.obstacleHint.obstacleKey)
+      ? hud.obstacleHint.obstacleKey
+      : null;
+
+  useEffect(() => {
+    if (activeLockedHintKey && activeLockedHintKey !== lastAvailableHintKeyRef.current) {
+      setHintNotifyBurstId((n) => n + 1);
+    }
+    lastAvailableHintKeyRef.current = activeLockedHintKey;
+  }, [activeLockedHintKey]);
+
+  const showHintNotice = (msg: string) => {
+    setHintAdNotice(msg);
+    if (hintNoticeTimerRef.current !== null) {
+      window.clearTimeout(hintNoticeTimerRef.current);
+    }
+    hintNoticeTimerRef.current = window.setTimeout(() => {
+      setHintAdNotice(null);
+      hintNoticeTimerRef.current = null;
+    }, 3200);
+  };
+
+  const handleWatchHintAd = async (obstacleKey: string) => {
+    if (hintAdLoading || unlockedHintKeys.includes(obstacleKey)) return;
+    audioManager.unlockAudio();
+    audioManager.playButtonClick();
+    engineRef.current?.clearInputs();
+    touchActiveRef.current = { left: false, right: false, jump: false };
+    setTouchState({ left: false, right: false, jump: false });
+
+    setHintAdLoading(true);
+    setHintAdNotice(null);
+    onHintAdStateChange?.(true);
+
+    try {
+      const result = await adMobService.showRewardedHintAd();
+      if (result.rewarded) {
+        setUnlockedHintKeys((prev) =>
+          prev.includes(obstacleKey) ? prev : [...prev, obstacleKey],
+        );
+        setDismissedHintKeys((prev) => prev.filter((k) => k !== obstacleKey));
+      } else if (result.reason === 'dismissed_early') {
+        showHintNotice('Ad skipped early — no hint for quitters.');
+      } else if (result.reason === 'offline') {
+        showHintNotice('Offline — ad unavailable, no hint unlocked.');
+      } else {
+        showHintNotice('No rewarded ad ready right now. Try again shortly.');
+      }
+    } catch {
+      showHintNotice('Ad failed to load — no hint granted.');
+    } finally {
+      setHintAdLoading(false);
+      onHintAdStateChange?.(false);
+    }
+  };
 
   const [activeTaunt, setActiveTaunt] = useState<{
     id: number;
@@ -230,6 +309,11 @@ export function GameCanvas({
         window.clearTimeout(flashTimerRef.current);
         flashTimerRef.current = null;
       }
+      if (hintNoticeTimerRef.current !== null) {
+        window.clearTimeout(hintNoticeTimerRef.current);
+        hintNoticeTimerRef.current = null;
+      }
+      onHintAdStateChange?.(false);
       engine.destroy();
       engineRef.current = null;
     };
@@ -243,6 +327,7 @@ export function GameCanvas({
     if (prevLevelRef.current !== levelId) {
       prevLevelRef.current = levelId;
       clearActiveTaunt();
+      setHintAdNotice(null);
       engineRef.current?.loadLevel(levelId);
     }
   }, [levelId]);
@@ -289,7 +374,7 @@ export function GameCanvas({
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const engine = engineRef.current;
-      if (!engine) return;
+      if (!engine || hintAdLoading) return;
 
       if (e.key === 'Escape' || e.key === 'p' || e.key === 'P') {
         e.preventDefault();
@@ -356,7 +441,7 @@ export function GameCanvas({
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('blur', onBlur);
     };
-  }, [paused, onPauseToggle, onToggleMute]);
+  }, [paused, hintAdLoading, onPauseToggle, onToggleMute]);
 
   const showTouchControls =
     settings.touchControls === 'always' || (settings.touchControls === 'auto' && isTouchDevice);
@@ -615,6 +700,118 @@ export function GameCanvas({
             </div>
           )}
         </div>
+
+        {/* Subtle, Non-Intrusive 'Ask for Hint' HUD Prompt (Levels 1–30 only, after dying; Rewarded Ad required) */}
+        {!paused &&
+          hud.levelId >= 1 &&
+          hud.levelId <= HINT_SYSTEM_MAX_LEVEL &&
+          (hud.levelDeaths > 0 || hud.levelDeathStreak > 0) &&
+          hud.obstacleHint && (() => {
+            const activeHint = hud.obstacleHint;
+            const isUnlocked = unlockedHintKeys.includes(activeHint.obstacleKey);
+            const isDismissed = dismissedHintKeys.includes(activeHint.obstacleKey);
+
+            return (
+              <div className="pointer-events-none absolute inset-x-0 bottom-2.5 sm:bottom-4 z-[21] flex flex-col items-center gap-1 px-3">
+                {hintAdNotice && (
+                  <div className="px-2.5 py-0.5 rounded bg-[#111111]/90 text-[#F5F3EE] text-[10px] font-mono-tabular">
+                    {hintAdNotice}
+                  </div>
+                )}
+
+                {!isUnlocked ? (
+                  <button
+                    key={`hint-btn-${activeHint.obstacleKey}-${hintNotifyBurstId}`}
+                    type="button"
+                    disabled={hintAdLoading}
+                    onClick={() => void handleWatchHintAd(activeHint.obstacleKey)}
+                    aria-label="Ask for Hint — watch a rewarded ad to unlock a cryptic clue for this level"
+                    className={`pointer-events-auto relative inline-flex items-center gap-1.5 sm:gap-2 px-3 py-1.5 rounded-lg border border-dashed border-[#111111]/35 bg-[#F5F3EE]/94 text-[#292524] hover:border-[#111111] hover:bg-[#FFFFFF] active:scale-[0.98] transition-colors cursor-pointer shadow-[2px_2px_0px_rgba(17,17,17,0.12)] ${
+                      showTouchControls ? 'max-w-[min(320px,46vw)]' : 'max-w-md'
+                    } ${
+                      hintAdLoading
+                        ? 'opacity-65 cursor-wait'
+                        : 'animate-hint-available'
+                    }`}
+                  >
+                    {!hintAdLoading && (
+                      <span
+                        aria-hidden="true"
+                        className="pointer-events-none absolute inset-0 rounded-lg border border-[#DC2626]/55 animate-hint-sonar"
+                      />
+                    )}
+                    <span className="relative inline-flex items-center justify-center shrink-0">
+                      <Lightbulb className="w-3.5 h-3.5 text-[#DC2626]" />
+                      {!hintAdLoading && (
+                        <span
+                          aria-hidden="true"
+                          className="absolute -top-0.5 -right-0.5 flex h-1.5 w-1.5"
+                        >
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#DC2626] opacity-75" />
+                          <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-[#DC2626]" />
+                        </span>
+                      )}
+                    </span>
+                    <span className="text-[10px] sm:text-[11px] font-mono-tabular font-bold text-[#111111] whitespace-nowrap">
+                      {hintAdLoading ? 'Loading Ad...' : 'Ask for Hint'}
+                    </span>
+                    <span aria-hidden="true" className="text-[#A8A29E]">
+                      ·
+                    </span>
+                    <span className="inline-flex items-center gap-1 text-[10px] sm:text-[11px] font-mono-tabular text-[#57534E] whitespace-nowrap">
+                      <Play className="w-2.5 h-2.5 fill-[#DC2626] text-[#DC2626]" />
+                      <span>
+                        {activeHint.deathsOnObstacle >= 3
+                          ? `Watch Ad (${activeHint.deathsOnObstacle}×)`
+                          : 'Watch Ad'}
+                      </span>
+                    </span>
+                  </button>
+                ) : isDismissed ? (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setDismissedHintKeys((prev) =>
+                        prev.filter((k) => k !== activeHint.obstacleKey),
+                      )
+                    }
+                    className="pointer-events-auto inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-dashed border-[#111111]/30 bg-[#F5F3EE]/88 text-[#57534E] hover:text-[#111111] hover:border-[#111111]/60 text-[10px] font-mono-tabular font-semibold transition-colors cursor-pointer"
+                  >
+                    <Lightbulb className="w-3 h-3 text-[#DC2626]" />
+                    <span>Show Hint</span>
+                  </button>
+                ) : (
+                  <div
+                    role="status"
+                    className={`pointer-events-auto flex items-start gap-2 px-3 py-1.5 rounded-lg border border-dashed border-[#111111]/40 bg-[#F5F3EE]/94 text-[#292524] shadow-[2px_2px_0px_rgba(17,17,17,0.1)] ${
+                      showTouchControls ? 'max-w-[min(340px,46vw)]' : 'max-w-lg'
+                    }`}
+                  >
+                    <Lightbulb className="w-3.5 h-3.5 text-[#DC2626] shrink-0 mt-0.5" />
+                    <p className="text-[10.5px] sm:text-xs font-mono-tabular leading-snug text-[#292524]">
+                      <span className="font-bold text-[#DC2626] mr-1.5">HINT ·</span>
+                      <span className="italic">&ldquo;{activeHint.clueText}&rdquo;</span>
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setDismissedHintKeys((prev) =>
+                          prev.includes(activeHint.obstacleKey)
+                            ? prev
+                            : [...prev, activeHint.obstacleKey],
+                        )
+                      }
+                      aria-label="Dismiss hint"
+                      title="Hide hint"
+                      className="p-0.5 rounded text-[#78716C] hover:text-[#111111] transition-colors shrink-0 cursor-pointer"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
 
         {/* Mobile Landscape Touch Controls (Medium-large ergonomic thumb targets, high-contrast, multi-touch safe) */}
         {showTouchControls && !paused && (

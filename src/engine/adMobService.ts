@@ -44,8 +44,11 @@ export interface RewardedAdResult {
   reason: 'rewarded' | 'dismissed_early' | 'unavailable' | 'offline' | 'busy' | 'error';
 }
 
+export type RewardedAdPurpose = 'extra_life' | 'hint';
+
 export interface DevTestAdSession {
   format: 'interstitial' | 'rewarded';
+  purpose?: RewardedAdPurpose;
   activeAdUnitId: string;
   productionAdUnitId: string;
   onComplete: (earnedReward: boolean) => void;
@@ -547,11 +550,22 @@ class AdMobService {
   }
 
   /**
-   * Voluntarily shows ONE rewarded advertisement.
+   * Voluntarily shows ONE rewarded advertisement for an Extra Life.
    * Grants reward (`rewarded: true`) ONLY when Google AdMob confirms full completion.
-   * Skipping early, closing before reward callback, or load failure returns `rewarded: false`.
    */
   public async showRewardedExtraLifeAd(): Promise<RewardedAdResult> {
+    return this.showRewardedAd('extra_life');
+  }
+
+  /**
+   * Voluntarily shows ONE rewarded advertisement to unlock a cryptic obstacle hint (Levels 1–30).
+   * Uses the exact Rewarded Ad Unit ID and grants the hint ONLY on verified ad completion.
+   */
+  public async showRewardedHintAd(): Promise<RewardedAdResult> {
+    return this.showRewardedAd('hint');
+  }
+
+  private async showRewardedAd(purpose: RewardedAdPurpose): Promise<RewardedAdResult> {
     if (this.isShowingFullscreenAd) {
       return { rewarded: false, reason: 'busy' };
     }
@@ -559,7 +573,7 @@ class AdMobService {
       return { rewarded: false, reason: 'offline' };
     }
 
-    // Ensure Home banner is never shown during death screen / rewarded ad
+    // Ensure Home banner is never shown during rewarded ads
     this.hideHomeBanner();
 
     const androidBridge = this.getAndroidBridge();
@@ -621,6 +635,7 @@ class AdMobService {
       return new Promise<RewardedAdResult>((resolve) => {
         this.activeDevAd = {
           format: 'rewarded',
+          purpose,
           activeAdUnitId: adUnitId,
           productionAdUnitId: ADMOB_PRODUCTION_AD_UNITS.rewarded,
           onComplete: (earnedReward: boolean) => {

@@ -59,6 +59,7 @@ export default function App() {
     id: number;
     type: 'respawn_exact' | 'restart_after_death';
   }>({ id: 0, type: 'restart_after_death' });
+  const [hintAdActive, setHintAdActive] = useState(false);
   const levelTransitionAdBusyRef = useRef(false);
 
   const openLeaderboards = useCallback(
@@ -121,19 +122,20 @@ export default function App() {
     audioManager.setAtmosphereLevel(activeLevelId);
 
     if (screen === 'PLAYING') {
-      audioManager.setAtmosphereDucked(activeModal !== 'NONE');
-      if (activeModal === 'NONE') {
+      const ducked = activeModal !== 'NONE' || hintAdActive;
+      audioManager.setAtmosphereDucked(ducked);
+      if (!ducked) {
         audioManager.startMusic();
       }
     } else if (screen === 'TITLE' || screen === 'LEVEL_SELECT') {
       audioManager.setAtmosphereDucked(false);
       audioManager.stopMusic();
     }
-  }, [screen, activeModal, activeLevelId]);
+  }, [screen, activeModal, activeLevelId, hintAdActive]);
 
   // Track persistent playtime every 5 seconds while playing
   useEffect(() => {
-    if (screen !== 'PLAYING' || activeModal !== 'NONE') return;
+    if (screen !== 'PLAYING' || activeModal !== 'NONE' || hintAdActive) return;
     const id = window.setInterval(() => {
       const prev = saveRef.current;
       commitSave({
@@ -142,7 +144,7 @@ export default function App() {
       });
     }, 5000);
     return () => window.clearInterval(id);
-  }, [screen, activeModal, commitSave]);
+  }, [screen, activeModal, hintAdActive, commitSave]);
 
   const showAchievementToast = useCallback((achievements: AchievementDef[]) => {
     if (achievements.length === 0) return;
@@ -486,7 +488,7 @@ export default function App() {
   const transitionLevelDef = getLevelById(levelTransition.targetLevelId);
   const isTransitionOpaque =
     levelTransition.phase === 'fading-out' || levelTransition.phase === 'holding';
-  const isEnginePaused = activeModal !== 'NONE' || isTransitionOpaque;
+  const isEnginePaused = activeModal !== 'NONE' || isTransitionOpaque || hintAdActive;
 
   return (
     <div className="fixed inset-0 overflow-hidden bg-[#F5F3EE] text-[#111111]">
@@ -550,6 +552,7 @@ export default function App() {
           onDeathScreenOpen={handleDeathScreenOpen}
           onTrickTriggered={handleTrickTriggered}
           onLevelComplete={handleLevelComplete}
+          onHintAdStateChange={setHintAdActive}
           restartToken={restartToken}
           deathAction={deathAction}
         />

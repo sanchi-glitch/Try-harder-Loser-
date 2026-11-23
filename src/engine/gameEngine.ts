@@ -7,6 +7,7 @@ import {
   pickMidRunMockery,
   type DeathStreakMilestone,
 } from '../data/deathMessages';
+import { HINT_SYSTEM_MAX_LEVEL, resolveObstacleHintForHud } from '../data/hintClues';
 import { getLevelById } from '../data/levels';
 import type {
   CheckpointDef,
@@ -1711,6 +1712,15 @@ export class PlatformerEngine {
   }
 
   private emitHud(): void {
+    const levelStreak = this.deathStreakByLevel.get(this.level.id) ?? 0;
+    const resolvedHint = resolveObstacleHintForHud(
+      this.level,
+      this.px + PLAYER_W / 2,
+      (lid, minX, maxX, causes) => adaptiveDifficulty.getZoneDeathCount(lid, minX, maxX, causes),
+      adaptiveDifficulty.getDeathClusters(this.level.id),
+      Math.max(this.levelDeaths, levelStreak),
+    );
+
     this.callbacks.onHudUpdate({
       levelId: this.level.id,
       chapter: this.level.chapter,
@@ -1728,6 +1738,14 @@ export class PlatformerEngine {
       prankBanner: this.prankBanner,
       prankBannerId: this.prankBannerId,
       adaptiveHint: this.adaptiveHint,
+      obstacleHint: resolvedHint
+        ? {
+            obstacleKey: resolvedHint.obstacleKey,
+            deathsOnObstacle: resolvedHint.deathsOnObstacle,
+            clueText: resolvedHint.clueText,
+            centerX: resolvedHint.centerX,
+          }
+        : null,
     });
   }
 
@@ -2303,6 +2321,12 @@ export class PlatformerEngine {
         ctx.fillText(`×${cluster.count}`, cx, cy - 14);
       }
       ctx.restore();
+    }
+
+    // Levels 1–30 hints are strictly gated behind the Rewarded Ad HUD prompt
+    // (3+ deaths on the same obstacle) — never leak free un-watched clues in world space.
+    if (this.level.id <= HINT_SYSTEM_MAX_LEVEL) {
+      return;
     }
 
     if (!snap.repeatFailZone || !this.level.adaptiveClue) return;

@@ -110,6 +110,26 @@ export class AdaptiveDifficultySystem {
   }
 
   /**
+   * Counts deaths within a specific horizontal obstacle zone on a given level
+   * (optionally filtered by death cause) to unlock subtle per-obstacle hints.
+   */
+  public getZoneDeathCount(
+    levelId: number,
+    minX: number,
+    maxX: number,
+    causes?: DeathCause[],
+  ): number {
+    let count = 0;
+    for (const pt of this.deathRecords) {
+      if (pt.levelId !== levelId) continue;
+      if (pt.x < minX || pt.x > maxX) continue;
+      if (causes && causes.length > 0 && !causes.includes(pt.cause)) continue;
+      count += 1;
+    }
+    return count;
+  }
+
+  /**
    * Computes non-overlapping spatial death clusters (centroid + density + recency)
    * for the specified level, sorted from hottest cluster to coolest.
    */
@@ -147,11 +167,22 @@ export class AdaptiveDifficultySystem {
       let sumX = 0;
       let sumY = 0;
       let recentCount = 0;
+      const causeCounts = new Map<DeathCause, number>();
       for (const m of members) {
         sumX += m.x;
         sumY += m.y;
+        causeCounts.set(m.cause, (causeCounts.get(m.cause) ?? 0) + 1);
         if (now - m.timestamp <= RECENT_WINDOW_MS) {
           recentCount += 1;
+        }
+      }
+
+      let dominantCause: DeathCause = members[members.length - 1].cause;
+      let topCauseCount = 0;
+      for (const [causeKey, cnt] of causeCounts.entries()) {
+        if (cnt > topCauseCount) {
+          topCauseCount = cnt;
+          dominantCause = causeKey;
         }
       }
 
@@ -168,6 +199,7 @@ export class AdaptiveDifficultySystem {
         recentCount,
         radius: CLUSTER_RADIUS,
         intensity,
+        dominantCause,
       });
     }
 
@@ -316,7 +348,10 @@ export class AdaptiveDifficultySystem {
       activeModifierText = 'Adaptive: Sweeper active — keep moving.';
     } else if (repeatFailZone) {
       playstyleLabel = 'Determined Optimist';
-      activeModifierText = 'Adaptive: Environmental clue revealed.';
+      activeModifierText =
+        levelId <= 30
+          ? null
+          : 'Adaptive: Environmental clue revealed.';
     }
 
     return {

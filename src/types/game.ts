@@ -159,6 +159,17 @@ export interface ExitDef {
   triggerDistance?: number;
 }
 
+export interface ObstacleTutorialHint {
+  id: string;
+  minX: number;
+  maxX: number;
+  x: number;
+  y: number;
+  text: string;
+  minDeaths?: number; // deaths required on this specific obstacle before revealing (default: 2)
+  causes?: DeathCause[];
+}
+
 export interface LevelDef {
   id: number;
   chapter: number;
@@ -175,6 +186,8 @@ export interface LevelDef {
   signs: SignDef[];
   fakeRewards: FakeRewardDef[];
   exits: ExitDef[];
+  // Optional subtle per-obstacle tutorial hints (Levels 1-5, revealed only after repeat obstacle deaths)
+  tutorialHints?: ObstacleTutorialHint[];
   // Optional hint shown if adaptive detects repeated failures
   adaptiveClue?: {
     x: number;
@@ -200,6 +213,7 @@ export interface DeathCluster {
   recentCount: number;
   radius: number;
   intensity: number; // 0..1 normalized hotspot heat
+  dominantCause?: DeathCause;
 }
 
 export interface AdaptiveSnapshot {
@@ -215,6 +229,13 @@ export interface AdaptiveSnapshot {
   trapFrequencyMultiplier: number;
   isEscalationEligibleLevel: boolean;
   activeModifierText: string | null;
+}
+
+export interface HudObstacleHintState {
+  obstacleKey: string;
+  deathsOnObstacle: number;
+  clueText: string;
+  centerX: number;
 }
 
 export interface HudSnapshot {
@@ -234,6 +255,7 @@ export interface HudSnapshot {
   prankBanner: string | null;
   prankBannerId: number;
   adaptiveHint: string | null;
+  obstacleHint: HudObstacleHintState | null;
 }
 
 export interface LevelCompletePayload {

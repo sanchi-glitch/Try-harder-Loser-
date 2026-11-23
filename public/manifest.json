@@ -1,0 +1,10 @@
+{
+  "name": "Try harder, Loser!",
+  "short_name": "Try harder, Loser!",
+  "description": "100 levels. Zero mercy. Don't blame the game. You're just bad.",
+  "start_url": "/",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#F5F3EE",
+  "theme_color": "#F5F3EE"
+}

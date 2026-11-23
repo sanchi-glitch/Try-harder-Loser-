@@ -1,0 +1,235 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Pillar 0: Global Default-Deny Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Hardened Global Primitives ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidLevelKey(levelKey) {
+      return levelKey is string
+        && levelKey.size() >= 7
+        && levelKey.size() <= 9
+        && levelKey.matches('^level_([1-9]|[1-9][0-9]|100)$');
+    }
+
+    function isValidPlayerName(name) {
+      return name is string
+        && name.size() >= 2
+        && name.size() <= 28
+        && name.matches('^[a-zA-Z0-9 _\\-.!]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // --- Validation Blueprints (Anti-Update-Gap) ---
+    function isValidUserProfile(data, userId) {
+      return data.keys().hasAll(['userId', 'playerName', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['userId', 'playerName', 'createdAt', 'updatedAt'])
+        && isValidId(data.userId)
+        && data.userId == userId
+        && data.userId == request.auth.uid
+        && isValidPlayerName(data.playerName)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidLeaderboardBucket(data, levelKey) {
+      return data.keys().hasAll(['levelId', 'levelName', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['levelId', 'levelName', 'createdAt', 'updatedAt'])
+        && data.levelId is int
+        && data.levelId >= 1
+        && data.levelId <= 100
+        && levelKey == 'level_' + string(data.levelId)
+        && data.levelName is string
+        && data.levelName.size() >= 1
+        && data.levelName.size() <= 80
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidLeaderboardEntry(data, levelKey, userId) {
+      return data.keys().hasAll([
+          'userId',
+          'playerName',
+          'levelId',
+          'bestTimeMs',
+          'deaths',
+          'jumps',
+          'zeroDeath',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'userId',
+          'playerName',
+          'levelId',
+          'bestTimeMs',
+          'deaths',
+          'jumps',
+          'zeroDeath',
+          'createdAt',
+          'updatedAt'
+        ])
+        && isValidId(data.userId)
+        && data.userId == userId
+        && data.userId == request.auth.uid
+        && isValidPlayerName(data.playerName)
+        && data.levelId is int
+        && data.levelId >= 1
+        && data.levelId <= 100
+        && levelKey == 'level_' + string(data.levelId)
+        && data.bestTimeMs is int
+        && data.bestTimeMs >= 500
+        && data.bestTimeMs <= 36000000
+        && data.deaths is int
+        && data.deaths >= 0
+        && data.deaths <= 100000
+        && data.jumps is int
+        && data.jumps >= 0
+        && data.jumps <= 100000
+        && data.zeroDeath is bool
+        && ((data.zeroDeath == true && data.deaths == 0) || (data.zeroDeath == false && data.deaths > 0))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // --- Collection: /users/{userId} (Owner-Only Profile & Handle) ---
+    match /users/{userId} {
+      allow get: if isSignedIn()
+        && isValidId(userId)
+        && userId == request.auth.uid;
+
+      allow list: if false;
+
+      allow create: if isVerifiedUser()
+        && isValidId(userId)
+        && userId == request.auth.uid
+        && isValidUserProfile(incoming(), userId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser()
+        && isValidId(userId)
+        && userId == request.auth.uid
+        && isValidUserProfile(incoming(), userId)
+        && incoming().diff(existing()).affectedKeys().hasOnly(['playerName', 'updatedAt'])
+        && incoming().userId == existing().userId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+
+      allow delete: if isVerifiedUser()
+        && isValidId(userId)
+        && userId == request.auth.uid;
+    }
+
+    // --- Collection: /leaderboards/{levelKey} (Per-Level Parent Bucket) ---
+    match /leaderboards/{levelKey} {
+      allow get: if isSignedIn()
+        && isValidId(levelKey)
+        && isValidLevelKey(levelKey);
+
+      allow list: if false;
+
+      allow create: if isVerifiedUser()
+        && isValidId(levelKey)
+        && isValidLevelKey(levelKey)
+        && isValidLeaderboardBucket(incoming(), levelKey)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser()
+        && isValidId(levelKey)
+        && isValidLevelKey(levelKey)
+        && isValidLeaderboardBucket(incoming(), levelKey)
+        && incoming().diff(existing()).affectedKeys().hasOnly(['updatedAt'])
+        && incoming().levelId == existing().levelId
+        && incoming().levelName == existing().levelName
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+
+      allow delete: if false;
+
+      // --- Subcollection: /leaderboards/{levelKey}/entries/{userId} ---
+      match /entries/{userId} {
+        allow get: if isSignedIn()
+          && isValidId(levelKey)
+          && isValidLevelKey(levelKey)
+          && isValidId(userId);
+
+        // Secure bounded list query validated against resource.data (zero get()/exists() in list)
+        allow list: if isSignedIn()
+          && isValidId(levelKey)
+          && isValidLevelKey(levelKey)
+          && existing().bestTimeMs >= 500
+          && request.query.limit != null
+          && request.query.limit <= 50;
+
+        allow create: if isVerifiedUser()
+          && isValidId(levelKey)
+          && isValidLevelKey(levelKey)
+          && isValidId(userId)
+          && userId == request.auth.uid
+          && isValidLeaderboardEntry(incoming(), levelKey, userId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && existsAfter(/databases/$(database)/documents/leaderboards/$(levelKey));
+
+        allow update: if isVerifiedUser()
+          && isValidId(levelKey)
+          && isValidLevelKey(levelKey)
+          && isValidId(userId)
+          && userId == request.auth.uid
+          && isValidLeaderboardEntry(incoming(), levelKey, userId)
+          && exists(/databases/$(database)/documents/leaderboards/$(levelKey))
+          && incoming().userId == existing().userId
+          && incoming().levelId == existing().levelId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            // Action 1: Record faster personal best clear time
+            (
+              incoming().diff(existing()).affectedKeys().hasOnly([
+                'playerName',
+                'bestTimeMs',
+                'deaths',
+                'jumps',
+                'zeroDeath',
+                'updatedAt'
+              ])
+              && incoming().bestTimeMs <= existing().bestTimeMs
+            )
+            ||
+            // Action 2: Update public leaderboard display handle only
+            incoming().diff(existing()).affectedKeys().hasOnly(['playerName', 'updatedAt'])
+          );
+
+        allow delete: if isVerifiedUser()
+          && isValidId(levelKey)
+          && isValidLevelKey(levelKey)
+          && isValidId(userId)
+          && userId == request.auth.uid;
+      }
+    }
+  }
+}

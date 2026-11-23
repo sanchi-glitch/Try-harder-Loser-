@@ -1,0 +1,140 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Private user settings storing a player's chosen public leaderboard handle.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Authenticated Firebase UID owning this profile."
+        },
+        "playerName": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 28,
+          "pattern": "^[a-zA-Z0-9 _\\-.!]+$",
+          "description": "Sanitized public display handle shown on global leaderboards (no PII/email)."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the profile was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the profile was last updated."
+        }
+      },
+      "required": ["userId", "playerName", "createdAt", "updatedAt"]
+    },
+    "LeaderboardBucket": {
+      "title": "LeaderboardBucket",
+      "description": "Parent metadata document for a specific level's global leaderboard.",
+      "type": "object",
+      "properties": {
+        "levelId": {
+          "type": "integer",
+          "description": "Numeric level identifier from 1 to 100."
+        },
+        "levelName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "description": "Display title of the level."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the level leaderboard bucket was initialized."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the latest recorded leaderboard entry."
+        }
+      },
+      "required": ["levelId", "levelName", "createdAt", "updatedAt"]
+    },
+    "LeaderboardEntry": {
+      "title": "LeaderboardEntry",
+      "description": "A verified player's fastest personal-best clear record for a single level.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Authenticated Firebase UID of the player."
+        },
+        "playerName": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 28,
+          "pattern": "^[a-zA-Z0-9 _\\-.!]+$",
+          "description": "Sanitized public handle displayed on the global leaderboard."
+        },
+        "levelId": {
+          "type": "integer",
+          "description": "Level number from 1 to 100 matching the parent leaderboard bucket."
+        },
+        "bestTimeMs": {
+          "type": "integer",
+          "description": "Fastest clear duration in milliseconds (minimum 500ms, maximum 36000000ms)."
+        },
+        "deaths": {
+          "type": "integer",
+          "description": "Number of deaths during the fastest clear run (0 to 100000)."
+        },
+        "jumps": {
+          "type": "integer",
+          "description": "Number of jumps used during the fastest clear run (0 to 100000)."
+        },
+        "zeroDeath": {
+          "type": "boolean",
+          "description": "Whether the clear run had zero deaths."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the user first posted a time for this level."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the personal-best record was last updated."
+        }
+      },
+      "required": [
+        "userId",
+        "playerName",
+        "levelId",
+        "bestTimeMs",
+        "deaths",
+        "jumps",
+        "zeroDeath",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Owner-only user profile storing custom leaderboard handle without exposing PII."
+    },
+    "/leaderboards/{levelKey}": {
+      "schema": { "$ref": "#/entities/LeaderboardBucket" },
+      "description": "Per-level parent leaderboard document keyed as level_1 through level_100."
+    },
+    "/leaderboards/{levelKey}/entries/{userId}": {
+      "schema": { "$ref": "#/entities/LeaderboardEntry" },
+      "description": "Per-user fastest clear time entry for a specific level."
+    }
+  }
+}

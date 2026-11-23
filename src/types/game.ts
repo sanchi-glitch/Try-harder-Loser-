@@ -3,6 +3,7 @@ export type GameScreen = 'TITLE' | 'PLAYING' | 'LEVEL_SELECT';
 export type ModalType =
   | 'NONE'
   | 'PAUSE'
+  | 'DEATH'
   | 'SETTINGS'
   | 'STATS'
   | 'ACHIEVEMENTS'
@@ -243,4 +244,18 @@ export interface LevelCompletePayload {
   tricksTriggeredInLevel: number;
   isNewBestTime: boolean;
   newlyUnlockedAchievements: AchievementDef[];
+}
+
+export interface DeathLocationSnapshot {
+  levelId: number;
+  cause: DeathCause;
+  exactX: number;
+  exactY: number;
+  respawnX: number;
+  respawnY: number;
+  facing: 1 | -1;
+  levelDeaths: number;
+  levelDeathStreak: number;
+  deathMessage: string;
+  streakMilestone: 5 | 10 | 20 | null;
 }

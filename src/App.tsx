@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { AdMobTestOverlay } from './components/AdMobOverlays';
+import { DeathScreenModal } from './components/DeathScreenModal';
 import { GameCanvas } from './components/GameCanvas';
 import { AchievementToast, LevelCompleteModal, PauseModal } from './components/GamePlayOverlays';
 import { LeaderboardModal } from './components/LeaderboardModal';
@@ -9,6 +11,7 @@ import { AchievementsModal, StatsModal } from './components/StatsAndAchievements
 import { TitleScreen } from './components/TitleScreen';
 import { useFirebase } from './contexts/FirebaseContext';
 import { getLevelById, LEVELS } from './data/levels';
+import { adMobService, MAX_REWARDED_ADS_PER_DEATH } from './engine/adMobService';
 import { audioManager } from './engine/audio';
 import { submitLevelClearTime } from './engine/leaderboardService';
 import {
@@ -20,6 +23,7 @@ import {
 } from './engine/saveManager';
 import type {
   AchievementDef,
+  DeathLocationSnapshot,
   GameScreen,
   GameSettings,
   LevelCompletePayload,
@@ -44,6 +48,18 @@ export default function App() {
   const [levelCompletePayload, setLevelCompletePayload] = useState<LevelCompletePayload | null>(null);
   const [toastAchievement, setToastAchievement] = useState<AchievementDef | null>(null);
   const toastTimerRef = useRef<number | null>(null);
+
+  // Google AdMob Rewarded Extra-Life & Death Screen state
+  const [deathSnapshot, setDeathSnapshot] = useState<DeathLocationSnapshot | null>(null);
+  const [extraLives, setExtraLives] = useState(0);
+  const [adsWatchedThisDeath, setAdsWatchedThisDeath] = useState(0);
+  const [rewardedAdLoading, setRewardedAdLoading] = useState(false);
+  const [rewardedAdStatus, setRewardedAdStatus] = useState<string | null>(null);
+  const [deathAction, setDeathAction] = useState<{
+    id: number;
+    type: 'respawn_exact' | 'restart_after_death';
+  }>({ id: 0, type: 'restart_after_death' });
+  const levelTransitionAdBusyRef = useRef(false);
 
   const openLeaderboards = useCallback(
     (levelId = 100, returnModal: ModalType = 'NONE') => {
@@ -88,14 +104,32 @@ export default function App() {
     audioManager.updateSettings(save.settings);
   }, [save.settings]);
 
-  // Start subtle background music during active gameplay
+  // Initialize Google AdMob SDK once asynchronously and preload ads
   useEffect(() => {
-    if (screen === 'PLAYING' && activeModal === 'NONE') {
-      audioManager.startMusic();
-    } else if (screen === 'TITLE') {
-      audioManager.stopMusic();
+    void adMobService.initialize();
+  }, []);
+
+  // Guarantee Banner Ad is hidden everywhere outside the Home Screen
+  useEffect(() => {
+    if (screen !== 'TITLE' || activeModal !== 'NONE') {
+      adMobService.hideHomeBanner();
     }
   }, [screen, activeModal]);
+
+  // Start subtle background music & dynamic level-scaled atmosphere during active gameplay
+  useEffect(() => {
+    audioManager.setAtmosphereLevel(activeLevelId);
+
+    if (screen === 'PLAYING') {
+      audioManager.setAtmosphereDucked(activeModal !== 'NONE');
+      if (activeModal === 'NONE') {
+        audioManager.startMusic();
+      }
+    } else if (screen === 'TITLE' || screen === 'LEVEL_SELECT') {
+      audioManager.setAtmosphereDucked(false);
+      audioManager.stopMusic();
+    }
+  }, [screen, activeModal, activeLevelId]);
 
   // Track persistent playtime every 5 seconds while playing
   useEffect(() => {
@@ -172,16 +206,23 @@ export default function App() {
   const startLevel = useCallback(
     (levelId: number, forceRestart = false) => {
       clearTransitionTimers();
+      adMobService.hideHomeBanner();
 
       const applyLevelSwap = () => {
         setActiveLevelId(levelId);
         if (forceRestart) {
           setRestartToken((n) => n + 1);
         }
+        setExtraLives(0);
+        setAdsWatchedThisDeath(0);
+        setDeathSnapshot(null);
+        setRewardedAdStatus(null);
         setLevelCompletePayload(null);
         setActiveModal('NONE');
         setScreen('PLAYING');
         commitSave({ ...saveRef.current, currentLevelId: levelId });
+        void adMobService.preloadInterstitial();
+        void adMobService.preloadRewarded();
       };
 
       const prefersReducedMotion =
@@ -217,6 +258,25 @@ export default function App() {
     [clearTransitionTimers, commitSave],
   );
 
+  // Natural level-to-next-level transition with non-blocking Interstitial Ad
+  const handleNextLevelWithInterstitial = useCallback(
+    async (completedLevelId: number) => {
+      if (levelTransitionAdBusyRef.current) return;
+      levelTransitionAdBusyRef.current = true;
+      const nextLevelId = Math.min(LEVELS.length, completedLevelId + 1);
+
+      try {
+        await adMobService.showLevelTransitionInterstitial(completedLevelId, nextLevelId);
+      } catch {
+        // Always continue loading the next level even if an ad fails or is unavailable
+      } finally {
+        levelTransitionAdBusyRef.current = false;
+        startLevel(nextLevelId);
+      }
+    },
+    [startLevel],
+  );
+
   const handleDeathRecorded = useCallback(
     (levelId: number) => {
       updateSaveAndEvaluate((draft) => {
@@ -228,6 +288,74 @@ export default function App() {
     },
     [updateSaveAndEvaluate],
   );
+
+  const handleDeathScreenOpen = useCallback((snapshot: DeathLocationSnapshot) => {
+    adMobService.hideHomeBanner();
+    setDeathSnapshot(snapshot);
+    setAdsWatchedThisDeath(0);
+    setRewardedAdLoading(false);
+    setRewardedAdStatus(null);
+    setActiveModal('DEATH');
+    void adMobService.preloadRewarded();
+  }, []);
+
+  const handleWatchRewardedAd = useCallback(async () => {
+    if (rewardedAdLoading || adsWatchedThisDeath >= MAX_REWARDED_ADS_PER_DEATH) return;
+
+    setRewardedAdLoading(true);
+    setRewardedAdStatus(null);
+
+    try {
+      const result = await adMobService.showRewardedExtraLifeAd();
+      if (result.rewarded) {
+        // Grant exactly ONE extra life ONLY after Google AdMob confirms completion
+        setExtraLives((prev) => prev + 1);
+        setAdsWatchedThisDeath((prev) => Math.min(MAX_REWARDED_ADS_PER_DEATH, prev + 1));
+        setRewardedAdStatus(
+          '+1 Extra Life earned! Respawn at your exact death spot or watch another ad.',
+        );
+      } else if (result.reason === 'dismissed_early') {
+        setRewardedAdStatus('Ad skipped before completion — no extra life granted.');
+      } else if (result.reason === 'offline') {
+        setRewardedAdStatus('Offline — ad unavailable. You can restart the level anytime.');
+      } else {
+        setRewardedAdStatus('No rewarded ad available right now — restart the level normally.');
+      }
+    } catch {
+      setRewardedAdStatus('Ad failed to load — no extra life granted.');
+    } finally {
+      setRewardedAdLoading(false);
+    }
+  }, [adsWatchedThisDeath, rewardedAdLoading]);
+
+  const handleRespawnWithExtraLife = useCallback(() => {
+    if (extraLives <= 0 || rewardedAdLoading) return;
+    setExtraLives((prev) => Math.max(0, prev - 1));
+    setDeathSnapshot(null);
+    setRewardedAdStatus(null);
+    setActiveModal('NONE');
+    setDeathAction((prev) => ({ id: prev.id + 1, type: 'respawn_exact' }));
+  }, [extraLives, rewardedAdLoading]);
+
+  const handleRestartFromDeathScreen = useCallback(() => {
+    if (rewardedAdLoading) return;
+    setExtraLives(0);
+    setAdsWatchedThisDeath(0);
+    setDeathSnapshot(null);
+    setRewardedAdStatus(null);
+    setActiveModal('NONE');
+    setDeathAction((prev) => ({ id: prev.id + 1, type: 'restart_after_death' }));
+  }, [rewardedAdLoading]);
+
+  const handleReturnToMenuFromDeath = useCallback(() => {
+    if (rewardedAdLoading) return;
+    setExtraLives(0);
+    setAdsWatchedThisDeath(0);
+    setDeathSnapshot(null);
+    setRewardedAdStatus(null);
+    setActiveModal('NONE');
+    setScreen('TITLE');
+  }, [rewardedAdLoading]);
 
   const handleTrickTriggered = useCallback(
     (kind: 'trap' | 'fake_reward' | 'fourth_wall') => {
@@ -281,7 +409,9 @@ export default function App() {
         isNewBestTime,
         newlyUnlockedAchievements: unlockedNow,
       });
+      setDeathSnapshot(null);
       setActiveModal('LEVEL_COMPLETE');
+      void adMobService.preloadInterstitial();
 
       if (!user) {
         setLeaderboardSyncStatus('unauthenticated');
@@ -398,23 +528,30 @@ export default function App() {
           levelId={activeLevelId}
           settings={save.settings}
           totalDeathsGlobal={save.totalDeaths}
+          extraLives={extraLives}
           paused={isEnginePaused}
           onPauseToggle={handlePauseToggle}
           onGoHome={() => {
+            setExtraLives(0);
+            setDeathSnapshot(null);
             setActiveModal('NONE');
             setLevelCompletePayload(null);
             setScreen('TITLE');
           }}
           onOpenLevels={() => {
+            setExtraLives(0);
+            setDeathSnapshot(null);
             setActiveModal('NONE');
             setLevelCompletePayload(null);
             setScreen('LEVEL_SELECT');
           }}
           onToggleMute={handleToggleMute}
           onDeathRecorded={handleDeathRecorded}
+          onDeathScreenOpen={handleDeathScreenOpen}
           onTrickTriggered={handleTrickTriggered}
           onLevelComplete={handleLevelComplete}
           restartToken={restartToken}
+          deathAction={deathAction}
         />
       )}
 
@@ -425,18 +562,40 @@ export default function App() {
           levelName={currentLevelDef.name}
           onResume={() => setActiveModal('NONE')}
           onRestart={() => {
+            setExtraLives(0);
+            setDeathSnapshot(null);
             setActiveModal('NONE');
             setRestartToken((n) => n + 1);
           }}
           onOpenSettings={() => setActiveModal('SETTINGS')}
           onOpenLevels={() => {
+            setExtraLives(0);
+            setDeathSnapshot(null);
             setActiveModal('NONE');
             setScreen('LEVEL_SELECT');
           }}
           onMainMenu={() => {
+            setExtraLives(0);
+            setDeathSnapshot(null);
             setActiveModal('NONE');
             setScreen('TITLE');
           }}
+        />
+      )}
+
+      {activeModal === 'DEATH' && deathSnapshot && screen === 'PLAYING' && (
+        <DeathScreenModal
+          snapshot={deathSnapshot}
+          levelLabel={`Level ${String(currentLevelDef.id).padStart(2, '0')} · Chapter ${currentLevelDef.chapter}`}
+          levelName={currentLevelDef.name}
+          extraLives={extraLives}
+          adsWatchedThisDeath={adsWatchedThisDeath}
+          adLoading={rewardedAdLoading}
+          adStatusMessage={rewardedAdStatus}
+          onWatchRewardedAd={() => void handleWatchRewardedAd()}
+          onRespawnWithExtraLife={handleRespawnWithExtraLife}
+          onRestartLevel={handleRestartFromDeathScreen}
+          onReturnToMenu={handleReturnToMenuFromDeath}
         />
       )}
 
@@ -448,7 +607,7 @@ export default function App() {
           onOpenLeaderboards={() =>
             openLeaderboards(levelCompletePayload.levelId, 'LEVEL_COMPLETE')
           }
-          onNextLevel={() => startLevel(Math.min(LEVELS.length, levelCompletePayload.levelId + 1))}
+          onNextLevel={() => void handleNextLevelWithInterstitial(levelCompletePayload.levelId)}
           onReplay={() => startLevel(levelCompletePayload.levelId, true)}
           onOpenLevels={() => {
             setActiveModal('NONE');
@@ -489,6 +648,7 @@ export default function App() {
       )}
 
       <AchievementToast achievement={toastAchievement} />
+      <AdMobTestOverlay />
 
       {/* Smooth Fade-Out / Fade-In Level Transition Curtain */}
       <div

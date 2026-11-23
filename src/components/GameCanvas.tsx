@@ -3,6 +3,7 @@ import {
   ArrowRight,
   ArrowUp,
   Grid,
+  Heart,
   Home,
   Menu,
   RotateCcw,
@@ -21,18 +22,20 @@ import { getRandomDeathTaunt } from '../data/taunts';
 import { audioManager } from '../engine/audio';
 import { PlatformerEngine } from '../engine/gameEngine';
 import { formatTimeMs } from '../engine/saveManager';
-import type { GameSettings, HudSnapshot } from '../types/game';
+import type { DeathLocationSnapshot, GameSettings, HudSnapshot } from '../types/game';
 
 interface GameCanvasProps {
   levelId: number;
   settings: GameSettings;
   totalDeathsGlobal: number;
+  extraLives: number;
   paused: boolean;
   onPauseToggle: () => void;
   onGoHome: () => void;
   onOpenLevels: () => void;
   onToggleMute: () => void;
   onDeathRecorded: (levelId: number, levelDeaths: number) => void;
+  onDeathScreenOpen: (snapshot: DeathLocationSnapshot) => void;
   onTrickTriggered: (kind: 'trap' | 'fake_reward' | 'fourth_wall') => void;
   onLevelComplete: (stats: {
     levelId: number;
@@ -42,21 +45,25 @@ interface GameCanvasProps {
     tricksTriggeredInLevel: number;
   }) => void;
   restartToken: number;
+  deathAction: { id: number; type: 'respawn_exact' | 'restart_after_death' };
 }
 
 export function GameCanvas({
   levelId,
   settings,
   totalDeathsGlobal,
+  extraLives,
   paused,
   onPauseToggle,
   onGoHome,
   onOpenLevels,
   onToggleMute,
   onDeathRecorded,
+  onDeathScreenOpen,
   onTrickTriggered,
   onLevelComplete,
   restartToken,
+  deathAction,
 }: GameCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const engineRef = useRef<PlatformerEngine | null>(null);
@@ -69,10 +76,16 @@ export function GameCanvas({
   // Latest callbacks in refs so engine never restarts when React state updates
   const callbacksRef = useRef({
     onDeathRecorded,
+    onDeathScreenOpen,
     onTrickTriggered,
     onLevelComplete,
   });
-  callbacksRef.current = { onDeathRecorded, onTrickTriggered, onLevelComplete };
+  callbacksRef.current = {
+    onDeathRecorded,
+    onDeathScreenOpen,
+    onTrickTriggered,
+    onLevelComplete,
+  };
 
   const [hud, setHud] = useState<HudSnapshot>({
     levelId,
@@ -189,6 +202,9 @@ export function GameCanvas({
         }, tauntDuration);
         callbacksRef.current.onDeathRecorded(lid, ld);
       },
+      onDeathScreenOpen: (snapshot) => {
+        callbacksRef.current.onDeathScreenOpen(snapshot);
+      },
       onTrickTriggered: (k) => {
         if (k === 'trap') {
           triggerScreenShake('trap');
@@ -240,6 +256,20 @@ export function GameCanvas({
       engineRef.current?.restartLevel();
     }
   }, [restartToken]);
+
+  // Sync Death Screen resolution (Rewarded Exact-Spot Respawn vs. Normal Restart)
+  const prevDeathActionRef = useRef(deathAction.id);
+  useEffect(() => {
+    if (prevDeathActionRef.current !== deathAction.id) {
+      prevDeathActionRef.current = deathAction.id;
+      clearActiveTaunt();
+      if (deathAction.type === 'respawn_exact') {
+        engineRef.current?.respawnAtSavedDeathLocation();
+      } else {
+        engineRef.current?.confirmDeathRestart();
+      }
+    }
+  }, [deathAction]);
 
   // Sync settings
   useEffect(() => {
@@ -540,6 +570,18 @@ export function GameCanvas({
                   <span aria-hidden="true" className="h-3 w-px bg-[#111111]/15" />
                   <span className="text-[10px] font-bold text-[#DC2626] leading-none">
                     {hud.levelDeathStreak}x
+                  </span>
+                </>
+              )}
+              {extraLives > 0 && (
+                <>
+                  <span aria-hidden="true" className="h-3 w-px bg-[#111111]/15" />
+                  <span
+                    title="Extra lives ready for exact-location respawn"
+                    className="inline-flex items-center gap-0.5 text-[10px] sm:text-[11px] font-extrabold text-[#DC2626] leading-none"
+                  >
+                    <Heart className="w-3 h-3 fill-[#DC2626] text-[#DC2626]" />
+                    {extraLives}
                   </span>
                 </>
               )}

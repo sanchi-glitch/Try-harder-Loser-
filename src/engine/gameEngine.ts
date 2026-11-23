@@ -11,6 +11,7 @@ import { getLevelById } from '../data/levels';
 import type {
   CheckpointDef,
   DeathCause,
+  DeathLocationSnapshot,
   ExitDef,
   FakeRewardDef,
   GameSettings,
@@ -140,6 +141,7 @@ interface Particle {
 export interface EngineCallbacks {
   onHudUpdate: (snapshot: HudSnapshot) => void;
   onDeathRecorded: (levelId: number, totalLevelDeaths: number, levelDeathStreak: number) => void;
+  onDeathScreenOpen?: (snapshot: DeathLocationSnapshot) => void;
   onTrickTriggered: (kind: 'trap' | 'fake_reward' | 'fourth_wall') => void;
   onLevelComplete: (stats: {
     levelId: number;
@@ -191,9 +193,12 @@ export class PlatformerEngine {
   private runCycle = 0;
   private blinkTimer = 2.4;
   private isBlinking = false;
-  private state: 'alive' | 'dying' | 'respawning' | 'won' = 'alive';
+  private state: 'alive' | 'dying' | 'death_screen' | 'respawning' | 'won' = 'alive';
   private stateTimer = 0;
   private respawnPop = 1;
+  private respawnInvulnTimer = 0;
+  private lastSafeGroundedPos = { x: 80, y: 370 };
+  private savedDeathSnapshot: DeathLocationSnapshot | null = null;
 
   // Fourth-wall state
   private lookingAtPlayer = false;
@@ -314,6 +319,9 @@ export class PlatformerEngine {
     this.revealedTriggers.clear();
     this.spawnX = this.level.spawn.x;
     this.spawnY = this.level.spawn.y;
+    this.lastSafeGroundedPos = { x: this.level.spawn.x, y: this.level.spawn.y };
+    this.savedDeathSnapshot = null;
+    this.respawnInvulnTimer = 0;
     this.currentDeathMessage = null;
     this.deathMessageTimer = 0;
     this.prankBanner = null;
@@ -326,6 +334,7 @@ export class PlatformerEngine {
     this.stickmanGhostTrail.clear();
 
     adaptiveDifficulty.startLevel(levelId);
+    audioManager.setAtmosphereLevel(levelId, this.deathStreakByLevel.get(levelId) ?? 0);
     this.buildEntities(true);
     this.respawnPlayerInstant();
     this.emitHud();
@@ -333,6 +342,99 @@ export class PlatformerEngine {
 
   public restartLevel(): void {
     this.loadLevel(this.level.id);
+  }
+
+  /**
+   * Rewarded Ad Extra-Life Respawn:
+   * Restores the player directly at the exact saved death location without
+   * restarting the level or sending them back to the starting point, preserving
+   * timer, progress, checkpoints, and world state.
+   */
+  public respawnAtSavedDeathLocation(): boolean {
+    const snap = this.savedDeathSnapshot;
+    if (!snap) return false;
+
+    this.savedDeathSnapshot = null;
+    this.pendingFullStartReset = false;
+    this.clearInputs();
+
+    // Restore any collapsed tile or landed falling block right at the respawn footprint
+    // so the player is never trapped inside/above an empty void immediately upon respawn.
+    for (const p of this.platforms) {
+      const nearHoriz =
+        snap.respawnX + PLAYER_W > p.def.x - 24 && snap.respawnX < p.def.x + p.def.w + 24;
+      if (!nearHoriz) continue;
+      if (p.def.kind === 'fake_drop' && p.dropState !== 'idle') {
+        p.x = p.def.x;
+        p.y = p.def.y;
+        p.active = true;
+        p.dropState = 'idle';
+        p.dropTimer = 0;
+      } else if (p.def.kind === 'crumble' && p.crumbleState !== 'idle') {
+        p.active = true;
+        p.crumbleState = 'idle';
+        p.crumbleTimer = 0;
+      }
+    }
+    for (const h of this.hazards) {
+      if (h.def.kind === 'falling_block' && h.fallState !== 'idle') {
+        const near =
+          snap.respawnX + PLAYER_W > h.def.x - 28 && snap.respawnX < h.def.x + h.def.w + 28;
+        if (near) {
+          h.x = h.def.x;
+          h.y = h.def.y;
+          h.fallState = 'idle';
+          h.fallVy = 0;
+          h.fallTimer = 0;
+        }
+      }
+    }
+
+    this.px = snap.respawnX;
+    this.py = snap.respawnY;
+    this.vx = 0;
+    this.vy = 0;
+    this.facing = snap.facing;
+    this.onGround = false;
+    this.coyoteTimer = COYOTE_TIME;
+    this.squashX = 1;
+    this.squashY = 1;
+    this.state = 'respawning';
+    this.stateTimer = 0.18;
+    this.respawnPop = 0.35;
+    this.respawnInvulnTimer = 1.65;
+    this.stickmanGhostTrail.clear();
+    this.fourthWallBubble = "Back from the dead. Don't waste it.";
+    this.fourthWallBubbleTimer = 2.4;
+    this.lookingAtPlayer = true;
+
+    this.camX = this.clampCameraX(this.px + PLAYER_W / 2 - VIEW_WIDTH * 0.42);
+    this.spawnDust(this.px + PLAYER_W / 2, this.py + PLAYER_H / 2, 12, '#DC2626');
+    this.spawnDust(this.px + PLAYER_W / 2, this.py + PLAYER_H / 2, 10, '#111111');
+    this.emitHud();
+    return true;
+  }
+
+  /**
+   * Called when the player declines the Rewarded Ad on the Death Screen and
+   * chooses RESTART LEVEL. Resets level state cleanly while preserving death
+   * counters and death-streak mockery progression.
+   */
+  public confirmDeathRestart(): void {
+    this.savedDeathSnapshot = null;
+    this.pendingFullStartReset = false;
+    this.clearInputs();
+    this.checkpointReached = false;
+    this.spawnX = this.level.spawn.x;
+    this.spawnY = this.level.spawn.y;
+    this.lastSafeGroundedPos = { x: this.level.spawn.x, y: this.level.spawn.y };
+    this.revealedTriggers.clear();
+    this.levelTime = 0;
+    this.jumpsUsedInLevel = 0;
+    this.respawnInvulnTimer = 0;
+    this.buildEntities(true);
+    this.respawnPlayerInstant();
+    this.emitHud();
   }
 
   private buildEntities(fullReset: boolean): void {
@@ -580,8 +682,19 @@ export class PlatformerEngine {
       return;
     }
 
+    // Freeze world simulation cleanly while the Death Screen is presented
+    // so exact death position & gameplay state remain preserved for rewarded respawn.
+    if (this.state === 'death_screen') {
+      this.updateParticles(dt);
+      this.updateGhostTrail(dt, false);
+      return;
+    }
+
     if (this.state !== 'won') {
       this.levelTime += dt;
+    }
+    if (this.respawnInvulnTimer > 0) {
+      this.respawnInvulnTimer = Math.max(0, this.respawnInvulnTimer - dt);
     }
 
     this.updatePlatforms(dt);
@@ -602,6 +715,12 @@ export class PlatformerEngine {
     } else if (this.state === 'dying') {
       this.stateTimer -= dt;
       if (this.stateTimer <= 0) {
+        if (this.callbacks.onDeathScreenOpen && this.savedDeathSnapshot) {
+          this.state = 'death_screen';
+          this.clearInputs();
+          this.callbacks.onDeathScreenOpen(this.savedDeathSnapshot);
+          return;
+        }
         const fullReset = this.pendingFullStartReset;
         this.pendingFullStartReset = false;
         this.buildEntities(fullReset);
@@ -822,6 +941,19 @@ export class PlatformerEngine {
           this.vy = 0;
           this.onGround = true;
 
+          // Record last stable grounded footing for safe exact-edge pit recovery
+          if (
+            p.def.kind === 'solid' ||
+            p.def.kind === 'moving' ||
+            p.def.kind === 'invisible'
+          ) {
+            const safeX = Math.max(
+              p.x + 2,
+              Math.min(p.x + p.w - PLAYER_W - 2, this.px),
+            );
+            this.lastSafeGroundedPos = { x: safeX, y: p.y - PLAYER_H };
+          }
+
           // Handle special platform interactions on landing/standing
           if (p.def.kind === 'crumble' && p.crumbleState === 'idle') {
             const local = adaptiveDifficulty.getLocalTrapModifiers(
@@ -895,6 +1027,9 @@ export class PlatformerEngine {
     }
 
     // Check hazard collisions (forgiving hitbox inset of 4px so near-misses feel fair!)
+    // Brief invulnerability grace after rewarded extra-life respawn at exact death spot
+    if (this.respawnInvulnTimer > 0) return;
+
     const hbX = this.px + 4;
     const hbY = this.py + 5;
     const hbW = PLAYER_W - 8;
@@ -1415,10 +1550,13 @@ export class PlatformerEngine {
   private killPlayer(cause: DeathCause): void {
     if (this.state !== 'alive') return;
     this.state = 'dying';
-    this.stateTimer = 0.52;
+    this.stateTimer = this.callbacks.onDeathScreenOpen ? 0.36 : 0.52;
     this.hitstopTimer = 0.055;
     this.deathFlashAlpha = 0.28;
     this.triggerShake(0.24, 9);
+
+    const exactX = this.px;
+    const exactY = this.py;
 
     this.levelDeaths += 1;
     this.totalDeathsGlobal += 1;
@@ -1437,12 +1575,16 @@ export class PlatformerEngine {
     const hadCheckpoint = this.checkpointReached;
     const distanceFromStart = Math.abs(this.px - this.level.spawn.x);
 
+    // Only apply automatic start-reset immediately when no interactive Death Screen is attached;
+    // when Death Screen is active, preserve checkpoints & state so Rewarded Extra Life can restore exact spot.
     if (resetToStart) {
       this.pendingFullStartReset = true;
-      this.checkpointReached = false;
-      this.spawnX = this.level.spawn.x;
-      this.spawnY = this.level.spawn.y;
-      this.revealedTriggers.clear();
+      if (!this.callbacks.onDeathScreenOpen) {
+        this.checkpointReached = false;
+        this.spawnX = this.level.spawn.x;
+        this.spawnY = this.level.spawn.y;
+        this.revealedTriggers.clear();
+      }
       if (!streakMockery && (hadCheckpoint || distanceFromStart > 320)) {
         this.showPrankBanner(this.pickStartResetBanner(hadCheckpoint));
       }
@@ -1456,6 +1598,31 @@ export class PlatformerEngine {
       : pickDeathMessage(cause, repeatCount, this.level.id);
     this.deathMessageId += 1;
     this.deathMessageTimer = streakMilestone ? 4.4 : 3.2;
+
+    // Save exact death position for rewarded extra-life respawn
+    // (for pit falls off the bottom of the screen, anchor right at the exact edge where the player fell)
+    const respawnX =
+      cause === 'pit'
+        ? this.lastSafeGroundedPos.x
+        : Math.max(8, Math.min(this.level.worldWidth - PLAYER_W - 8, exactX));
+    const respawnY =
+      cause === 'pit'
+        ? this.lastSafeGroundedPos.y
+        : Math.max(36, Math.min(this.level.worldHeight - PLAYER_H - 18, exactY));
+
+    this.savedDeathSnapshot = {
+      levelId: this.level.id,
+      cause,
+      exactX,
+      exactY,
+      respawnX,
+      respawnY,
+      facing: this.facing,
+      levelDeaths: this.levelDeaths,
+      levelDeathStreak: nextLevelStreak,
+      deathMessage: this.currentDeathMessage,
+      streakMilestone,
+    };
 
     if (streakMockery) {
       const bannerDuration =
@@ -1483,6 +1650,7 @@ export class PlatformerEngine {
     this.lookingAtPlayer = true;
 
     audioManager.playDeath();
+    audioManager.setAtmosphereLevel(this.level.id, nextLevelStreak);
     this.spawnDust(this.px + PLAYER_W / 2, this.py + PLAYER_H / 2, 18, '#DC2626');
     this.spawnDust(this.px + PLAYER_W / 2, this.py + PLAYER_H / 2, 14, '#111111');
 
@@ -1622,10 +1790,10 @@ export class PlatformerEngine {
     this.stickmanGhostTrail.render(ctx, this.level.id, PLAYER_W, PLAYER_H, {
       x: this.px,
       y: this.py,
-      visible: this.state !== 'dying',
+      visible: this.state !== 'dying' && this.state !== 'death_screen',
     });
 
-    if (this.state !== 'dying') {
+    if (this.state !== 'dying' && this.state !== 'death_screen') {
       this.drawStickman(ctx);
     }
 
@@ -2242,6 +2410,19 @@ export class PlatformerEngine {
 
     ctx.save();
     ctx.translate(cx, bottomY);
+    if (this.respawnInvulnTimer > 0) {
+      // Subtle crimson protection halo & rhythmic blink during post-extra-life grace window
+      const pulse = 0.5 + 0.5 * Math.sin(this.worldTime * 22);
+      ctx.save();
+      ctx.strokeStyle = `rgba(220, 38, 38, ${(0.25 + pulse * 0.45).toFixed(2)})`;
+      ctx.lineWidth = 1.6;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.arc(0, -22, 24, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+      ctx.globalAlpha = pulse > 0.35 ? 1 : 0.45;
+    }
     const popScale = this.state === 'respawning' ? 0.4 + 0.6 * this.respawnPop : 1;
     ctx.scale(this.squashX * popScale, this.squashY * popScale);
 

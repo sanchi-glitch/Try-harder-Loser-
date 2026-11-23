@@ -18,6 +18,7 @@ import { STICKMAN_HOME_INSULTS } from '../data/deathMessages';
 import { CHAPTERS, getLevelById, LEVELS } from '../data/levels';
 import { audioManager } from '../engine/audio';
 import type { SaveData } from '../types/game';
+import { HomeBannerAdSlot } from './AdMobOverlays';
 
 interface TitleScreenProps {
   save: SaveData;
@@ -374,7 +375,7 @@ export function TitleScreen({
   };
 
   return (
-    <div className="relative w-full h-full overflow-hidden bg-[#F5F3EE] select-none">
+    <div className="relative w-full h-full overflow-hidden bg-[#F5F3EE] select-none flex flex-col">
       {/* Live-world minimalist stickman canvas backdrop */}
       <canvas ref={canvasRef} className="absolute inset-0 w-full h-full block pointer-events-none" />
 
@@ -382,7 +383,7 @@ export function TitleScreen({
       <div className="pointer-events-none absolute inset-2 sm:inset-4 border border-[#111111]/10 rounded-lg" />
 
       {/* Clean horizontal top bar on Home Screen */}
-      <header className="relative z-20 flex items-center justify-between gap-3 safe-px sm:px-8 pt-2.5 sm:pt-4">
+      <header className="relative z-20 shrink-0 flex items-center justify-between gap-3 safe-px sm:px-8 pt-2 sm:pt-3.5">
         <div className="text-[11px] sm:text-xs font-mono-tabular text-[#57534E] whitespace-nowrap">
           {LEVELS.length} Levels · {CHAPTERS.length} Chapters · {save.totalDeaths} Deaths
         </div>
@@ -425,8 +426,8 @@ export function TitleScreen({
         </div>
       </header>
 
-      {/* Main Horizontal Home Stage — staged cleanly in upper horizon above the animated stickman floor */}
-      <div className="relative z-10 flex flex-col items-center justify-center h-[calc(100%-64px)] sm:h-[calc(100%-84px)] safe-px pb-12 sm:pb-16">
+      {/* Main Horizontal Home Stage — centered cleanly above the control hint & Home-only Banner */}
+      <div className="relative z-10 flex-1 min-h-0 flex flex-col items-center justify-center safe-px pb-1 sm:pb-3">
         <div className="max-w-3xl w-full flex flex-col items-center text-center">
           {/* Bespoke inline SVG Title Lockup */}
           <svg
@@ -611,11 +612,14 @@ export function TitleScreen({
         </div>
       </div>
 
-      {/* Single flat control hint line */}
-      <div className="absolute bottom-1.5 sm:bottom-2.5 inset-x-0 z-20 text-center pointer-events-none safe-px">
-        <p className="text-[10px] sm:text-[11px] font-mono-tabular text-[#57534E]">
-          Horizontal Mode · A / D Move · Space Jump · R Restart · Esc Menu
-        </p>
+      {/* Bottom Home Dock: Control hint + Home-Screen-Only AdMob Banner (zero overlap with controls) */}
+      <div className="relative z-20 shrink-0 flex flex-col items-center">
+        <div className="text-center pointer-events-none safe-px pb-1">
+          <p className="text-[10px] sm:text-[11px] font-mono-tabular text-[#57534E]">
+            Horizontal Mode · A / D Move · Space Jump · R Restart · Esc Menu
+          </p>
+        </div>
+        <HomeBannerAdSlot visible={!modalOpen && !menuDrawerOpen} />
       </div>
 
       {/* Wide Horizontal 2-Column Game Menu Modal (fits cleanly on short landscape phone screens) */}

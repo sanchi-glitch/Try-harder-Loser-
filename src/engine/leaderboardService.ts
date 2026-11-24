@@ -26,6 +26,8 @@ export const MIN_CLEAR_TIME_MS = 500;
 export const MAX_CLEAR_TIME_MS = 36_000_000;
 export const MAX_STAT_COUNT = 100_000;
 export const LEADERBOARD_QUERY_LIMIT = 25;
+export const WORLD_RANK_QUERY_LIMIT = 50;
+export const FINAL_LEVEL_ID = 100;
 
 export interface LeaderboardEntryRecord {
   userId: string;
@@ -36,6 +38,21 @@ export interface LeaderboardEntryRecord {
   jumps: number;
   zeroDeath: boolean;
   updatedAtMs: number | null;
+}
+
+export interface WorldRankSummary {
+  /** Number of verified players who completed the game (up to WORLD_RANK_QUERY_LIMIT). */
+  totalFinishers: number;
+  /** True if the query hit WORLD_RANK_QUERY_LIMIT (display as "50+"). */
+  hasMoreFinishers: boolean;
+  /** 1-based World Rank if the user is in the top 50 verified finishers; null otherwise. */
+  userRank: number | null;
+  /** True if the user has a verified Level 100 completion entry in Firestore (even if beyond #50). */
+  userVerifiedFinisher: boolean;
+  /** User's verified best clear time on Level 100, if any. */
+  userBestTimeMs: number | null;
+  /** Fastest verified clear time on Level 100 worldwide, if any. */
+  fastestFinisherTimeMs: number | null;
 }
 
 export interface SubmitScoreResult {
@@ -290,4 +307,119 @@ export function subscribeToLevelLeaderboard(
       }
     },
   );
+}
+
+/**
+ * Subscribes to verified completions of the final level (Level 100) to compute
+ * how many players have completed the game worldwide and the signed-in user's World Rank.
+ * Must only be called when `authReady && user` is authenticated.
+ */
+export function subscribeToWorldRank(
+  userId: string,
+  onUpdate: (summary: WorldRankSummary) => void,
+  onError: (err: Error) => void,
+): () => void {
+  const levelKey = getLevelBucketKey(FINAL_LEVEL_ID);
+  const listPath = `leaderboards/${levelKey}/entries`;
+  const userEntryPath = `${listPath}/${userId}`;
+  const entriesRef = collection(db, 'leaderboards', levelKey, 'entries');
+  const q = query(
+    entriesRef,
+    where('bestTimeMs', '>=', MIN_CLEAR_TIME_MS),
+    orderBy('bestTimeMs', 'asc'),
+    limit(WORLD_RANK_QUERY_LIMIT),
+  );
+
+  let disposed = false;
+
+  const unsubscribe = onSnapshot(
+    q,
+    (snapshot) => {
+      if (disposed) return;
+
+      const docs = snapshot.docs;
+      const totalFinishers = docs.length;
+      const hasMoreFinishers = totalFinishers >= WORLD_RANK_QUERY_LIMIT;
+      const fastestRaw = docs[0]?.data()?.bestTimeMs;
+      const fastestFinisherTimeMs = typeof fastestRaw === 'number' ? fastestRaw : null;
+
+      const myIdx = docs.findIndex((docSnap) => {
+        const docUid = docSnap.data().userId;
+        return (typeof docUid === 'string' ? docUid : docSnap.id) === userId;
+      });
+
+      if (myIdx >= 0) {
+        const myTimeRaw = docs[myIdx].data().bestTimeMs;
+        onUpdate({
+          totalFinishers,
+          hasMoreFinishers,
+          userRank: myIdx + 1,
+          userVerifiedFinisher: true,
+          userBestTimeMs: typeof myTimeRaw === 'number' ? myTimeRaw : null,
+          fastestFinisherTimeMs,
+        });
+        return;
+      }
+
+      if (!hasMoreFinishers) {
+        onUpdate({
+          totalFinishers,
+          hasMoreFinishers: false,
+          userRank: null,
+          userVerifiedFinisher: false,
+          userBestTimeMs: null,
+          fastestFinisherTimeMs,
+        });
+        return;
+      }
+
+      // Top 50 is full and user is not in top 50: check if user completed Level 100 beyond #50
+      const userEntryRef = doc(db, 'leaderboards', levelKey, 'entries', userId);
+      void getDoc(userEntryRef)
+        .then((userSnap) => {
+          if (disposed) return;
+          if (userSnap.exists()) {
+            const myTimeRaw = userSnap.data().bestTimeMs;
+            onUpdate({
+              totalFinishers,
+              hasMoreFinishers: true,
+              userRank: null,
+              userVerifiedFinisher: true,
+              userBestTimeMs: typeof myTimeRaw === 'number' ? myTimeRaw : null,
+              fastestFinisherTimeMs,
+            });
+          } else {
+            onUpdate({
+              totalFinishers,
+              hasMoreFinishers: true,
+              userRank: null,
+              userVerifiedFinisher: false,
+              userBestTimeMs: null,
+              fastestFinisherTimeMs,
+            });
+          }
+        })
+        .catch((error) => {
+          if (disposed) return;
+          try {
+            handleFirestoreError(error, OperationType.GET, userEntryPath);
+          } catch (wrapped) {
+            onError(wrapped instanceof Error ? wrapped : new Error(String(wrapped)));
+          }
+        });
+    },
+    (error) => {
+      if (disposed) return;
+      try {
+        handleFirestoreError(error, OperationType.LIST, listPath);
+      } catch (wrapped) {
+        onError(wrapped instanceof Error ? wrapped : new Error(String(wrapped)));
+      }
+    },
+  );
+
+  return () => {
+    disposed = true;
+    unsubscribe();
+  };
 }

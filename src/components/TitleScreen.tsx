@@ -20,6 +20,7 @@ import { audioManager } from '../engine/audio';
 import type { SaveData } from '../types/game';
 import { HomeBannerAdSlot } from './AdMobOverlays';
 import { PWAInstallButton } from './PWAInstallButton';
+import { WorldRankIndicator } from './WorldRankIndicator';
 
 interface TitleScreenProps {
   save: SaveData;
@@ -479,9 +480,12 @@ export function TitleScreen({
             />
           </svg>
 
-          <p className="text-[11px] sm:text-sm text-[#44403C] font-medium mb-2.5 sm:mb-4 max-w-xl text-balance">
+          <p className="text-[11px] sm:text-sm text-[#44403C] font-medium mb-1.5 sm:mb-2.5 max-w-xl text-balance">
             100 levels. Zero mercy. Don&apos;t blame the game. You&apos;re just bad.
           </p>
+
+          {/* Live World Rank Indicator: Global Finishers vs. User */}
+          <WorldRankIndicator save={save} onOpenLeaderboards={onOpenLeaderboards} />
 
           {/* Primary Single-Row Horizontal Action Strip: Play, Levels, Game Options */}
           <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-3 mb-2 sm:mb-3.5">

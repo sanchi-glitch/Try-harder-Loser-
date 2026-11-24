@@ -56,10 +56,16 @@ export const ACHIEVEMENTS: AchievementDef[] = [
     quip: 'Yes, it knows you are watching.',
   },
   {
+    id: 'ultimate_test',
+    title: 'The Ultimate Test',
+    description: 'Survive Level 99: The Ultimate Test with zero hints.',
+    quip: 'One door left between you and absolute legend.',
+  },
+  {
     id: 'impossible',
-    title: 'ABSOLUTE PEAK',
-    description: 'Cross Level 100: TRY HARDER, LOSER!: LITERALLY IMPOSSIBLE.',
-    quip: 'You literally beat the impossible in Try harder, Loser!. Bow down.',
+    title: 'WAIT. YOU ACTUALLY BEAT THE GAME?',
+    description: 'Conquer Level 100: The Last Level with zero checkpoints and zero hints.',
+    quip: 'The stickman has officially run out of insults. Rare Victory achieved.',
   },
 ];
 

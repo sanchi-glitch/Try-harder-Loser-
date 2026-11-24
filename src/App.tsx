@@ -10,6 +10,7 @@ import { SettingsModal } from './components/SettingsModal';
 import { AchievementsModal, StatsModal } from './components/StatsAndAchievementsModal';
 import { TitleScreen } from './components/TitleScreen';
 import { useFirebase } from './contexts/FirebaseContext';
+import { getDifficultyStage } from './data/difficultyStages';
 import { getLevelById, LEVELS } from './data/levels';
 import { adMobService, MAX_REWARDED_ADS_PER_DEATH } from './engine/adMobService';
 import { audioManager } from './engine/audio';
@@ -29,6 +30,7 @@ import type {
   LevelCompletePayload,
   ModalType,
   SaveData,
+  UsedLevelHint,
 } from './types/game';
 
 export default function App() {
@@ -291,6 +293,17 @@ export default function App() {
     [updateSaveAndEvaluate],
   );
 
+  const handleHintUnlocked = useCallback(
+    (levelId: number, hint: UsedLevelHint) => {
+      updateSaveAndEvaluate((draft) => {
+        const lp = { ...getLevelProgress(draft, levelId) };
+        lp.usedHint = hint;
+        draft.levels[levelId] = lp;
+      });
+    },
+    [updateSaveAndEvaluate],
+  );
+
   const handleDeathScreenOpen = useCallback((snapshot: DeathLocationSnapshot) => {
     adMobService.hideHomeBanner();
     setDeathSnapshot(snapshot);
@@ -486,6 +499,7 @@ export default function App() {
 
   const currentLevelDef = getLevelById(activeLevelId);
   const transitionLevelDef = getLevelById(levelTransition.targetLevelId);
+  const transitionStage = getDifficultyStage(transitionLevelDef.id);
   const isTransitionOpaque =
     levelTransition.phase === 'fading-out' || levelTransition.phase === 'holding';
   const isEnginePaused = activeModal !== 'NONE' || isTransitionOpaque || hintAdActive;
@@ -553,6 +567,8 @@ export default function App() {
           onTrickTriggered={handleTrickTriggered}
           onLevelComplete={handleLevelComplete}
           onHintAdStateChange={setHintAdActive}
+          usedLevelHint={getLevelProgress(save, activeLevelId).usedHint ?? null}
+          onHintUnlocked={handleHintUnlocked}
           restartToken={restartToken}
           deathAction={deathAction}
         />
@@ -606,6 +622,7 @@ export default function App() {
         <LevelCompleteModal
           payload={levelCompletePayload}
           isFinalLevel={levelCompletePayload.levelId >= LEVELS.length}
+          totalDeathsGlobal={save.totalDeaths}
           leaderboardSyncStatus={leaderboardSyncStatus}
           onOpenLeaderboards={() =>
             openLeaderboards(levelCompletePayload.levelId, 'LEVEL_COMPLETE')
@@ -666,7 +683,7 @@ export default function App() {
           }`}
         >
           <div className="text-xs font-mono-tabular tracking-wide text-[#DC2626] font-bold">
-            LEVEL {String(transitionLevelDef.id).padStart(2, '0')} · Chapter {transitionLevelDef.chapter}
+            LEVEL {String(transitionLevelDef.id).padStart(2, '0')} · {transitionStage.name} ({transitionStage.difficulty})
           </div>
           <div className="font-display font-extrabold text-3xl sm:text-4xl tracking-tight mt-1">
             {transitionLevelDef.name}

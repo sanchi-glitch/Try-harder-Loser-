@@ -1,5 +1,6 @@
 import { Check, ChevronLeft, ChevronRight, Home, Lock, Play, Trophy } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { getDifficultyStage } from '../data/difficultyStages';
 import { CHAPTERS, LEVELS } from '../data/levels';
 import { audioManager } from '../engine/audio';
 import { formatTimeMs, getLevelProgress } from '../engine/saveManager';
@@ -79,6 +80,7 @@ export function LevelSelect({
   const chapterMeta = CHAPTERS.find((c) => c.id === selectedChapter) ?? CHAPTERS[0];
   const chapterLevels = LEVELS.filter((l) => l.chapter === selectedChapter);
   const focusedLevel = LEVELS.find((l) => l.id === focusedLevelId) ?? LEVELS[0];
+  const focusedStage = getDifficultyStage(focusedLevelId);
 
   const isLevelUnlocked = useCallback(
     (levelId: number): boolean => {
@@ -465,7 +467,10 @@ export function LevelSelect({
               <h2 className="font-display font-extrabold text-sm sm:text-xl tracking-tight truncate">
                 Chapter {chapterMeta.id}: {chapterMeta.title}
               </h2>
-              <p className="text-[11px] sm:text-xs text-[#57534E] truncate hidden sm:block">
+              <span className="text-[10px] sm:text-xs font-mono-tabular font-semibold text-[#DC2626] whitespace-nowrap shrink-0">
+                {focusedStage.name} · {focusedStage.difficulty}
+              </span>
+              <p className="text-[11px] sm:text-xs text-[#57534E] truncate hidden lg:block">
                 {chapterMeta.subtitle}
               </p>
             </div>
@@ -606,15 +611,15 @@ export function LevelSelect({
                           }`}
                         >
                           <Lock className="w-3 h-3" />
-                          {isLevel100 ? 'IMPOSSIBLE' : isLevel99 ? 'ALMOST' : 'Locked'}
+                          {isLevel100 ? 'LAST LEVEL' : isLevel99 ? 'ULTIMATE' : 'Locked'}
                         </span>
                       ) : isLevel100 ? (
                         <span className="text-[10px] font-mono-tabular font-bold text-[#DC2626]">
-                          IMPOSSIBLE
+                          RARE VICTORY
                         </span>
                       ) : isLevel99 ? (
                         <span className="text-[10px] font-mono-tabular font-bold text-[#DC2626]">
-                          ALMOST
+                          ULTIMATE
                         </span>
                       ) : (
                         <span className="text-[11px] font-mono-tabular text-[#57534E]">

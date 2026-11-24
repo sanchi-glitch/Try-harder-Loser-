@@ -140,8 +140,8 @@ export const LEVEL_COMPLETE_TAUNTS: Record<number, string> = {
   96: 'Level 96 cleared. Four stages from immortality — and 99% chance you fold.',
   97: 'Pixel-Perfect Purgatory beaten. Honestly horrifying that you’re still here.',
   98: '98 DONE. Level 99 is next — where almost every “legend” chokes forever.',
-  99: 'YOU SURVIVED LEVEL 99?! Unreal... Go click Next Level, loser. Level 100 has ZERO checkpoints and literally nobody crosses it.',
-  100: 'A ONCE-IN-A-LIFETIME RARE MOMENT. You crossed Level 100 with zero checkpoints. Even the stickman is speechless and bowing down — you conquered Try harder, Loser! and achieved ABSOLUTE PEAK.',
+  99: 'You actually survived The Ultimate Test?! Fine. Open Level 100. Zero checkpoints, zero hints, and the exit itself will not sit still.',
+  100: 'I told you if you won this I would have nothing left to insult. I am officially speechless. You conquered all 100 levels with zero checkpoints on the last stage.',
 };
 
 export function getLevelCompleteTaunt(levelId: number): string {

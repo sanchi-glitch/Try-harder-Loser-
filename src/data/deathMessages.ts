@@ -1,493 +1,718 @@
+import { getDifficultyStage, type DifficultyStageId } from './difficultyStages';
 import type { DeathCause } from '../types/game';
 
-export type StickmanInsultCategory = 'respawn' | 'trap' | 'idle' | 'jump_spam';
+export type StickmanInsultCategory =
+  | 'respawn'
+  | 'trap'
+  | 'idle'
+  | 'jump_spam'
+  | 'checkpoint'
+  | 'repeat_mistake';
+
+export type PersonalityAct = DifficultyStageId;
 
 /**
- * Returns cruelty tier 1..6 based on the player's current level (1..100).
- * Every tier makes the stickman noticeably crueler, colder, and more mocking.
+ * Maps any level (1..100) to its exact 12-stage commentary personality.
+ * The stickman is cruel and insulting right from Level 1, evolving in style:
+ *  1 (1-10):   Mocking
+ *  2 (11-20):  Sarcastic
+ *  3 (21-30):  Insulting
+ *  4 (31-40):  Brutal
+ *  5 (41-50):  Cruel
+ *  6 (51-60):  Ruthless
+ *  7 (61-70):  Psychological Mockery
+ *  8 (71-80):  Merciless
+ *  9 (81-90):  Maximum Cruelty
+ * 10 (91-98):  Final Descent
+ * 11 (99):     The Ultimate Test
+ * 12 (100):    The Last Level
+ */
+export function getPersonalityAct(levelId: number): PersonalityAct {
+  return getDifficultyStage(levelId).id;
+}
+
+/**
+ * Returns visual cruelty tier 1..6 based on the player's current level (1..100).
+ * Used for speech-bubble styling, atmosphere intensity, and modal badges.
  */
 export function getCrueltyTier(levelId: number): 1 | 2 | 3 | 4 | 5 | 6 {
   if (levelId >= 99) return 6;
-  if (levelId >= 90) return 5;
+  if (levelId >= 81) return 5;
   if (levelId >= 61) return 4;
   if (levelId >= 31) return 3;
   if (levelId >= 11) return 2;
   return 1;
 }
 
+// Non-repeating recent dialogue memory (prevents stale back-to-back lines)
+const RECENT_HISTORY_LIMIT = 6;
+const recentStickmanLines: string[] = [];
+
+function rememberLine(line: string): string {
+  recentStickmanLines.push(line);
+  if (recentStickmanLines.length > RECENT_HISTORY_LIMIT) {
+    recentStickmanLines.shift();
+  }
+  return line;
+}
+
+function pickFreshLine(pool: readonly string[]): string {
+  if (pool.length === 0) return 'Try harder, Loser!';
+  if (pool.length === 1) return rememberLine(pool[0]);
+  const fresh = pool.filter((line) => !recentStickmanLines.includes(line));
+  const source = fresh.length > 0 ? fresh : pool;
+  const choice = source[Math.floor(Math.random() * source.length)];
+  return rememberLine(choice);
+}
+
 export const GENERAL_DEATH_MESSAGES: string[] = [
-  'Try harder, Loser! Literally the title of the game.',
-  'Interesting strategy. Completely wrong, idiot.',
-  'The floor sends its regards.',
-  'You trusted that? Adorable.',
-  'Another attempt? Delusion looks terrible on you.',
-  'I would explain what happened, but you were right there.',
-  'Bold of you to assume the level wanted you alive.',
-  'Gravity remains undefeated.',
-  'Statistically speaking, you are not learning at all.',
-  'Have you considered not jumping into sharp red things?',
-  'Skill issue? Yes. 100% pure skill issue.',
-  'Plot twist: the level hates you personally.',
-  'Good news: respawns are free. Bad news: your ego is bankrupt.',
-  'If at first you fail, repeat the exact same mistake like a pro.',
-  'A masterclass in stubbornness without talent.',
-  'You fell for the oldest trick in this room.',
-  'Almost! (Not even remotely close, idiot.)',
-  'I blinked and you were already dead.',
-  'The bright red triangles are not decorative.',
-  'Trust is a currency you clearly cannot afford.',
-  'Confidence: 100%. Survival instincts: 0%.',
-  'Your muscle memory is actively sabotaging you.',
-  'Nine out of ten stickmen refuse to be controlled by you.',
-  'At least that humiliation was quick.',
+  'Aww, already dead?',
+  'Was that supposed to be a jump?',
+  "You're struggling with THIS?",
+  'You saw that coming and still walked into it?',
+  'Impressive. Wrong, but impressive.',
+  "Maybe the controls aren't the problem.",
+  'You have the survival instincts of a potato.',
+  'Another failure. How surprising.',
+  'Even the spikes are getting bored.',
+  "I've seen loading screens with better reflexes.",
+  'Your brain really took a day off.',
+  'That was painful to watch.',
+  'The checkpoint has seen enough.',
+  'At this point, failure is your personality.',
 ];
 
-export const CAUSE_DEATH_MESSAGES: Record<DeathCause, string[]> = {
+const ACT_DEATH_MESSAGES: Record<PersonalityAct, readonly string[]> = {
+  // 1-10: Mocking (cruel right from Level 1)
+  1: [
+    'Aww, already dead?',
+    'Was that supposed to be a jump?',
+    "You're struggling with THIS?",
+    'Gravity barely tried and still won.',
+    'You trusted the floor? Adorable.',
+    'That looked painful. Mostly for me watching.',
+    'Nice attempt. Completely terrible, though.',
+    'Red spikes are sharp. Shocking news, apparently.',
+  ],
+  // 11-20: Sarcastic
+  2: [
+    'You saw that coming and still walked into it?',
+    'Impressive. Wrong, but impressive.',
+    "Maybe the controls aren't the problem.",
+    'Bold choice. Predictably awful outcome.',
+    'You read the sign and obeyed? Cute.',
+    'The trap barely moved and still caught you.',
+    'Good news: respawns are free. Bad news: your timing.',
+    'Interesting strategy. Completely suicidal, of course.',
+  ],
+  // 21-30: Insulting
+  3: [
+    'You have the survival instincts of a potato.',
+    'Another failure. How surprising.',
+    'Even the spikes are getting bored.',
+    'Your thumbs are actively sabotaging you.',
+    'Same mistake, brand-new funeral.',
+    'The level is reading you like a picture book.',
+    'I am six ink lines and smarter than you.',
+    'Zero awareness. Pure stubbornness.',
+  ],
+  // 31-40: Brutal
+  4: [
+    "I've seen loading screens with better reflexes.",
+    'Your brain really took a day off.',
+    'That was painful to watch.',
+    'That jump was a crime against basic physics.',
+    'Even the moving platforms are avoiding you.',
+    'Confidence: 100%. Execution: 0%.',
+    'Watching you attempt this is free comedy.',
+    'Every betrayal lands because you never learn.',
+  ],
+  // 41-50: Cruel
+  5: [
+    'The checkpoint has seen enough.',
+    'You keep proving me right.',
+    'At this point, failure is your personality.',
+    'Your stickman is embarrassed to be seen with you.',
+    'Halfway to 100 and already falling apart.',
+    'Hints disappear after Level 50. Good luck with THAT.',
+    'You are not fighting the level — you are feeding it.',
+    'Quit now while your ego is still lukewarm.',
+  ],
+  // 51-60: Ruthless
+  6: [
+    'I genuinely expected nothing, yet you disappointed me.',
+    'Are you playing or conducting an experiment in failure?',
+    'Your last attempt was somehow better. Barely.',
+    'No hints left. Just you and your awful instincts.',
+    'You die faster than the traps can even reset.',
+    'Delete your reflexes and try starting from scratch.',
+    'Pure stubbornness. Zero precision.',
+  ],
+  // 61-70: Psychological Mockery
+  7: [
+    "You know what's coming. You still won't survive it.",
+    'I can practically hear your confidence disappearing.',
+    'Go ahead. Make the same mistake again.',
+    'Second-guessing every pixel yet? Good.',
+    'You hesitated for half a second — and threw the whole run.',
+    'Your own brain is doing half my job for me.',
+    'Trust the next platform. I dare you.',
+  ],
+  // 71-80: Merciless
+  8: [
+    "You've made it this far. What a waste of progress.",
+    'I almost respect your persistence. Almost.',
+    'Your suffering is becoming predictable.',
+    'Every death confirms why this game is named after you.',
+    'Close the tab before your thumbs file a complaint.',
+    'The nightmare owns your schedule now.',
+  ],
+  // 81-90: Maximum Cruelty
+  9: [
+    'Eighty levels and this is still your performance?',
+    'Perhaps the exit is avoiding you.',
+    'I would wish you luck, but that seems pointless.',
+    'You are NEVER surviving the 90s playing like that.',
+    'Keep hitting retry. Watching your pride dissolve is art.',
+    'Even the buzzsaws look tired of slicing you.',
+  ],
+  // 91-98: Final Descent
+  10: [
+    'So close to the end. Would be a shame to fall.',
+    "You've survived 90 levels just to do THAT?",
+    "Your determination is admirable. Your skills aren't.",
+    'Hands shaking yet? You do not belong up here.',
+    'One pixel off. Welcome to the Final Descent.',
+    'Turn back before Level 99 finishes what is left of your pride.',
+  ],
+  // 99: The Ultimate Test
+  11: [
+    'Oh, look. The almost-final level. How unfortunate.',
+    "You didn't really think this would be easy?",
+    'One more level. Try not to embarrass yourself.',
+    '99% of the way there and 100% choking.',
+    'Almost does NOT unlock Level 100.',
+  ],
+  // 100: The Last Level
+  12: [
+    'You actually made it here?',
+    "I wouldn't get comfortable.",
+    "If you win this, I'll have nothing left to insult.",
+    'Zero checkpoints. Zero hints. Back to pixel one.',
+    'Almost nobody beats Level 100. Definitely not like that.',
+  ],
+};
+
+export const CAUSE_DEATH_MESSAGES: Record<DeathCause, readonly string[]> = {
   spike: [
-    'Sharp observation, idiot. Very sharp.',
-    'Point taken. Straight through your stickman.',
+    'Sharp observation. Very sharp.',
+    'Even the spikes are getting bored.',
     'Red triangles: still lethal. Shocking, I know.',
     'You hugged the pointy furniture again.',
-    'Note to self: spikes do not move out of pity.',
   ],
   popup_spike: [
-    'Surprise! Did you even look at the floor seams?',
-    'Peek-a-boo. Try harder, Loser!',
-    'The floor was just waiting for someone gullible.',
-    'Never trust a suspiciously quiet tile.',
+    'You saw that coming and still walked into it?',
+    'Never trust a suspiciously quiet floor.',
+    'The floor was just waiting for someone predictable.',
     'Free acupuncture. Zero survival.',
   ],
   pit: [
-    'The void says hello and asks why you live down here.',
-    'Gravity just reminded you who is in charge.',
-    'Down is rarely the direction of victory, genius.',
-    'Look before you leap. Or after. Too late now.',
+    'Was that supposed to be a jump?',
+    'The void asks why you visit so often.',
+    'Gravity remains undefeated.',
     'Nice dive. Ten out of ten for comedy.',
   ],
   saw: [
-    'Spinning red blades are not escalators, idiot.',
-    'Timing is everything. You have none.',
+    'Spinning red blades are not escalators.',
+    "I've seen loading screens with better reflexes.",
     'You brought a stickman to a buzzsaw fight.',
     'A fresh slice of pure humiliation.',
   ],
   falling_block: [
-    'Heads up! Too slow, idiot.',
+    'Heads up! Too slow.',
     'Ceiling inspection: catastrophically failed.',
-    'That concrete block had a personal grudge.',
-    'Never stand beneath shaking masonry.',
+    'Your brain really took a day off under that block.',
+    'Never camp beneath angry masonry.',
   ],
   sweeper: [
-    'Standing still is a pathetic life choice.',
+    'Standing still is a risky life choice here.',
     'The game noticed you freezing in panic.',
-    'Keep moving or keep dying, idiot.',
+    'Keep moving or keep respawning.',
   ],
   fake_drop: [
-    'The floor sends its regards.',
+    'You trusted the floor. Adorable.',
     'That tile had more commitment issues than you.',
-    'You trusted the floor? In THIS game?!',
+    'The floor sends its regards.',
     'Floor.exe has stopped caring about you.',
   ],
 };
 
-export const REPEAT_SPOT_MESSAGES: string[] = [
-  'Same spot, same death. Truly tragic.',
-  'Doing the exact same jump expecting mercy, idiot?',
-  'This specific pixel owns your soul now.',
-  'Even the trap is embarrassed for you.',
-  'Try harder, Loser! Maybe use your eyes this time.',
-  'Three deaths in one spot? Iconic stupidity.',
-];
-
 // =========================================================================
-// ESCALATING STICKMAN SPEECH-BUBBLE INSULTS (6 CRUELTY TIERS: LV 1 -> 100)
+// CONTEXTUAL STICKMAN SPEECH-BUBBLE INSULTS (ALL 12 STAGES)
 // =========================================================================
 
-const RESPAWN_INSULTS_BY_TIER: Record<1 | 2 | 3 | 4 | 5 | 6, string[]> = {
-  // Tier 1 (Lv 1-10): Smug teasing
+const RESPAWN_INSULTS_BY_ACT: Record<PersonalityAct, readonly string[]> = {
   1: [
-    'Try harder, Loser!',
-    'Seriously?! On an early level?',
-    'You call that a jump?',
-    'Are your eyes even open?',
-    'Bro, red means STOP.',
-    'I saw that coming. You did not.',
-    'Bold choice. Terrible outcome.',
-    'Zero survival instincts.',
+    'Aww, already dead?',
+    'Was that supposed to be a jump?',
+    "You're struggling with THIS?",
+    'You trusted THAT floor?',
+    'Gravity: 1. You: 0.',
+    'Try opening your eyes this time.',
+  ],
+  2: [
+    'You saw that coming and still walked into it?',
+    'Impressive. Wrong, but impressive.',
+    "Maybe the controls aren't the problem.",
+    'Bold strategy. Horrible execution.',
+    'That trap wasn’t even subtle.',
     'Let ME drive next time.',
-    'Even a pigeon clears this.',
   ],
-  // Tier 2 (Lv 11-30): Condescending & biting
-  2: [
-    'Try harder, Loser! Still embarrassing.',
-    'My grandma clears this with her elbows.',
-    'Your reflexes are running on dial-up.',
-    'Revoking your gamer license right now.',
-    'I am 6 ink lines and smarter than you.',
-    'Please activate at least ONE brain cell.',
-    'Your thumbs owe you a formal apology.',
-    'Watching you play physically hurts me.',
-    'Did your brain lag mid-jump again?',
-    'Painful to watch. Truly painful.',
-  ],
-  // Tier 3 (Lv 31-60): Brutal roasting, zero respect
   3: [
-    'Just close the tab, idiot.',
-    'You are embarrassing BOTH of us right now.',
-    'Even the spikes feel pity for you.',
-    'Delete your reflexes and start over.',
-    'Every jump is a crime against physics.',
-    'Quit now while you still have dignity.',
-    'Is your jump button broken or just you?',
-    'You die faster than I can mock you.',
-    'Certified clown performance, idiot.',
-    'Not a single thought behind those clicks.',
+    'You have the survival instincts of a potato.',
+    'Another failure. How surprising.',
+    'Even the spikes are getting bored.',
+    'Did your brain lag mid-jump?',
+    'I am six ink lines and smarter than you.',
+    'Same mistake, fresh embarrassment.',
   ],
-  // Tier 4 (Lv 61-89): Ice-cold psychological cruelty
   4: [
-    'You are NEVER seeing 99, let alone 100.',
-    'Every death proves I was right about you.',
-    'Delusion looks awful on you, idiot.',
-    'This isn’t a game — it’s public humiliation.',
-    'Even the saws are bored of slicing you.',
-    'Your ego is shattered. Just like my bones.',
-    'All these deaths and STILL zero skill.',
-    'Stop torturing me with your garbage timing.',
-    'You actually thought you were good? LMAO.',
-    'Keep clicking retry. Watching you fold is art.',
+    "I've seen loading screens with better reflexes.",
+    'Your brain really took a day off.',
+    'That was painful to watch.',
+    'Watching you play hurts my eyes.',
+    'Every jump is a cry for help.',
+    'Try harder, Loser!',
   ],
-  // Tier 5 (Lv 90-98): Ruthless gatekeeper savagery
   5: [
-    '90s? You do NOT belong up here, idiot.',
+    'The checkpoint has seen enough.',
+    'You keep proving me right.',
+    'At this point, failure is your personality.',
+    'Certified clown performance.',
+    'Your thumbs owe you an apology.',
+    'Still clicking retry? Fascinating.',
+  ],
+  6: [
+    'I genuinely expected nothing, yet you disappointed me.',
+    'Are you playing or conducting an experiment in failure?',
+    'Your last attempt was somehow better. Barely.',
+    'No hints left. Good luck.',
+    'Just close the tab, loser.',
+    'Pure stubbornness, zero skill.',
+  ],
+  7: [
+    "You know what's coming. You still won't survive it.",
+    'I can practically hear your confidence disappearing.',
+    'Go ahead. Make the same mistake again.',
+    'Trust the next ledge. I dare you.',
+    'Hesitated again. Saw it immediately.',
+    'Your own brain is beating you now.',
+  ],
+  8: [
+    "You've made it this far. What a waste of progress.",
+    'I almost respect your persistence. Almost.',
+    'Your suffering is becoming predictable.',
+    'This is no longer a game — it’s a loop.',
+    'Even the blades are bored of you.',
+    'Keep folding. It’s hilarious.',
+  ],
+  9: [
+    'Eighty levels and this is still your performance?',
+    'Perhaps the exit is avoiding you.',
+    'I would wish you luck, but that seems pointless.',
+    'You do NOT belong in the 80s.',
+    'Delusion looks terrible on you.',
+    'Pack it up already.',
+  ],
+  10: [
+    'So close to the end. Would be a shame to fall.',
+    "You've survived 90 levels just to do THAT?",
+    "Your determination is admirable. Your skills aren't.",
     'Hands shaking yet? Hilarious.',
-    'Turn back before 99 shatters your soul.',
-    'One pixel off. Story of your miserable run.',
-    'Cry harder. The traps laugh at you.',
-    'You are not built for the endgame. Quit.',
-    'Gatekept by basic timing. Pathetic.',
-    'Every failure here is permanent shame.',
+    'One pixel off. Again.',
+    'Turn back before 99 breaks you.',
   ],
-  // Tier 6 (Lv 99-100): Existential endgame mockery
-  6: [
-    'TRY HARDER, LOSER! UNTIL ETERNITY.',
-    'Zero mercy. Zero dignity. Zero chance.',
-    'Your fingers are begging you to quit.',
-    'Peak humiliation achieved.',
+  11: [
+    'Oh, look. The almost-final level. How unfortunate.',
+    "You didn't really think this would be easy?",
+    'One more level. Try not to embarrass yourself.',
+    '99% there and STILL choking.',
+    'Almost doesn’t unlock 100.',
+  ],
+  12: [
+    'You actually made it here?',
+    "I wouldn't get comfortable.",
+    "If you win this, I'll have nothing left to insult.",
+    'Zero checkpoints. Back to pixel one.',
+    'Nobody beats 100. Especially not you.',
   ],
 };
 
-const LEVEL_99_INSULTS: string[] = [
-  '99! ONE level from 100 and you STILL choked, loser!',
-  'Almost doesn’t unlock Level 100. Cry harder.',
-  'You can SMELL Level 100 and still faceplanted!',
-  'Stuck at 99% forever. Literally tragic.',
-  '99 is where fake legends get exposed.',
-  'So close... and yet STILL a loser.',
-  'Even if you crawl past 99, 100 will erase you.',
-];
+const CHECKPOINT_INSULTS_BY_ACT: Record<PersonalityAct, readonly string[]> = {
+  1: ['Saved! You’ll still find a way to fall.', 'A checkpoint? Already tired?', 'Don’t celebrate too early.'],
+  2: ['Safe for two seconds. Enjoy it.', 'Even this flag doubts you.', 'Checkpoint reached. Next trap ready.'],
+  3: ['Great, now I get to watch you fail from HERE.', 'You really needed a save point for that?', 'The flag is judging you too.'],
+  4: ['That checkpoint is about to work overtime.', 'You’re going to see this pole twenty times.', 'Saved your progress. Can’t save your reflexes.'],
+  5: ['The checkpoint has seen enough.', 'Hope you like this spot — you live here now.', 'Welcome to your new respawn home.'],
+  6: ['No hints, barely a checkpoint. Good luck.', 'Save point logged. Humiliation scheduled.', 'At least you won’t have to redo THAT ugly jump.'],
+  7: ['Sure that checkpoint is even going to save you?', 'You reached the flag. Now watch your confidence vanish.', 'Comfort is the first trap here.'],
+  8: ['Halfway through the nightmare. Don’t choke.', 'I almost respect you reaching this flag. Almost.', 'Your new favorite respawn spot.'],
+  9: ['Eighty levels deep and clinging to a flag.', 'This checkpoint is witnessing pure suffering.', 'Don’t get comfortable. The real trap is ahead.'],
+  10: ['So close to the end. Would be a shame to fall.', 'Checkpoint saved. Your nerves? Not so much.', 'Surviving 90 levels just to camp here?'],
+  11: ['You earned this checkpoint on 99. Now try not to choke.', 'Halfway through The Ultimate Test. Don’t blink.', 'One more stretch to 100. Try not to embarrass yourself.'],
+  12: ['Checkpoints? On Level 100? Keep dreaming.'],
+};
 
-const LEVEL_100_INSULTS: string[] = [
-  'NOBODY crosses Level 100. Definitely not you.',
-  'ZERO checkpoints! Enjoy walking from pixel 1, loser!',
-  'Try harder, Loser! Try 1,000 times. Still impossible.',
-  'You really thought YOU were that rare legend? HAHA!',
-  'Level 100 isn’t a level — it’s a brick wall for idiots.',
-  'Back to the very start! Suffer again!',
-  'Close the game. Literally no human beats 100.',
-  'Even with 10,000 tries you will never cross this.',
-];
+const REPEAT_MISTAKE_BY_ACT: Record<PersonalityAct, readonly string[]> = {
+  1: ['Same spot again? Really?', "You're struggling with THIS?", 'That exact gap owns you now.'],
+  2: ['You saw that coming and still walked into it?', 'Same trap, same jump, same result.', "Maybe the controls aren't the problem."],
+  3: ['Another failure. How surprising.', 'You have the survival instincts of a potato.', 'This specific pixel owns your soul.'],
+  4: ['That was painful to watch.', 'Your brain really took a day off.', "I've seen loading screens with better reflexes."],
+  5: ['You keep proving me right.', 'At this point, failure is your personality.', 'The checkpoint has seen enough.'],
+  6: ['Are you playing or conducting an experiment in failure?', 'I genuinely expected nothing, yet you disappointed me.', 'Same mistake? No hints are coming to save you.'],
+  7: ['Go ahead. Make the same mistake again.', "You know what's coming. You still won't survive it.", 'I can practically hear your confidence disappearing.'],
+  8: ['Your suffering is becoming predictable.', 'Same spot again. Truly tragic.', "You've made it this far. What a waste of progress."],
+  9: ['Eighty levels and STILL dying to the same spot?', 'I would wish you luck, but that seems pointless.', 'Perhaps the exit is avoiding you.'],
+  10: ["You've survived 90 levels just to repeat THAT mistake?", "Your determination is admirable. Your skills aren't.", 'So close to the end. Would be a shame to fall.'],
+  11: ["You didn't really think this would be easy?", 'One more level. Try not to embarrass yourself.', 'Choking on the exact same pixel of 99? Brutal.'],
+  12: ["I wouldn't get comfortable.", 'Back to pixel one. Again.', 'Rare to complete. Very common to fail right there.'],
+};
 
-const TRAP_INSULTS_BY_TIER: Record<1 | 2 | 3 | 4 | 5 | 6, string[]> = {
+const TRAP_INSULTS_BY_ACT: Record<PersonalityAct, readonly string[]> = {
+  1: ['Haha, gotcha!', 'You really walked right into that?', 'Trusted the floor? Adorable.'],
+  2: ['You saw that coming and still walked into it?', 'Impressive. Wrong, but impressive.', 'Fell for it immediately.'],
+  3: ['You have the survival instincts of a potato.', 'Hook, line, and sinker.', 'Every single bait works on you.'],
+  4: ['Your brain really took a day off.', 'That was painful to watch.', 'Walked straight into it. Classic.'],
+  5: ['You keep proving me right.', 'Still falling for traps on Level 40+?', 'Pure gullibility.'],
+  6: ['I genuinely expected nothing, yet you disappointed me.', 'No hints, no mercy, no survival.', 'Hooked again. Ruthless.'],
+  7: ["You know what's coming. You still won't survive it.", 'Trust issues kicking in yet?', 'Go ahead. Trust the next one too.'],
+  8: ['Your suffering is becoming predictable.', 'Every trap here has your name on it.', 'Fell for it in the 70s. Embarrassing.'],
+  9: ['Eighty levels and still falling for THAT?', 'Perhaps the exit is avoiding you.', 'I would wish you luck, but that seems pointless.'],
+  10: ["You've survived 90 levels just to do THAT?", 'Final Descent takes no prisoners.', 'So close. So gullible.'],
+  11: ["You didn't really think this would be easy?", 'Level 99 does not forgive trust.', 'Oh, look. Another trap got you.'],
+  12: ["I wouldn't get comfortable.", 'Welcome to Level 100. Trust nothing.', 'Everything in this room is lying to you.'],
+};
+
+const IDLE_INSULTS_BY_ACT: Record<PersonalityAct, readonly string[]> = {
+  1: ['Hello? Jump button broken?', 'Scared of a tiny gap?', 'The exit isn’t coming to you.'],
+  2: ["Maybe the controls aren't the problem.", 'Planning your next mistake?', 'Standing still won’t clear the level.'],
+  3: ['Even the spikes are getting bored.', 'Did your controller disconnect or just your brain?', 'Take your time. I love waiting.'],
+  4: ["I've seen loading screens with better reflexes.", 'Your brain really took a day off.', 'Staring at the trap won’t disarm it.'],
+  5: ['The checkpoint has seen enough.', 'Freezing up already? Typical.', 'At this point, hesitation is your personality.'],
+  6: ['Are you playing or conducting an experiment in failure?', 'No hints are going to appear. Move.', 'Staring won’t help after Level 50.'],
+  7: ['I can practically hear your confidence disappearing.', 'Afraid of the next step? You should be.', 'Go ahead. Make the same mistake again.'],
+  8: ['I almost respect your caution. Almost.', 'Your suffering is becoming predictable.', 'Still paralyzed in the 70s?'],
+  9: ['Perhaps the exit is avoiding you.', 'I would wish you luck, but that seems pointless.', 'Move, or close the tab.'],
+  10: ['Hands shaking too hard to move?', 'So close to the end. Move already.', "Your determination is admirable. Your skills aren't."],
+  11: ['One more level. Try not to embarrass yourself.', 'Staring at Level 99 won’t beat it.', "You didn't really think this would be easy?"],
+  12: ["I wouldn't get comfortable.", 'Level 100 waits for nobody.', "If you win this, I'll have nothing left to insult."],
+};
+
+const JUMP_SPAM_INSULTS_BY_ACT: Record<PersonalityAct, readonly string[]> = {
+  1: ['Was that supposed to be a jump?', 'Calm down, kangaroo.', 'Spamming jump won’t save you.'],
+  2: ['Impressive. Wrong, but impressive.', 'Button-mashing is not a strategy.', 'Maybe try aiming one of those jumps.'],
+  3: ['Even the spikes are getting bored of your hopping.', 'Panic-jumping already?', 'You jump like a startled toaster.'],
+  4: ['Your brain really took a day off.', 'That was painful to watch.', 'Every panic hop makes this funnier.'],
+  5: ['You keep proving me right.', 'Your thumb has zero impulse control.', 'Panic-mashing on Level 40+. Classic.'],
+  6: ['Are you playing or conducting an experiment in failure?', 'No hints, just pure panic hopping.', 'Stop mashing and start thinking.'],
+  7: ['I can practically hear your confidence disappearing.', 'Panic jumps feed the traps.', "You know what's coming. Jumping wildly won't help."],
+  8: ['Your suffering is becoming predictable.', 'Still button-mashing in the 70s?', 'Zero composure. Pure chaos.'],
+  9: ['Eighty levels and still panic-hopping?', 'I would wish you luck, but that seems pointless.', 'Pure button-mashing terror.'],
+  10: ['Hands shaking on the jump key?', "You've survived 90 levels just to mash?", "Your determination is admirable. Your skills aren't."],
+  11: ['Panic-hopping on Level 99? Good luck.', 'One more level. Try not to embarrass yourself.'],
+  12: ["I wouldn't get comfortable.", 'One panic jump on 100 and it’s back to pixel one.'],
+};
+
+// Measured ambient commentary (used sparingly on a long cooldown so it never feels spammy)
+const CONTINUOUS_COMMENTARY_BY_ACT: Record<PersonalityAct, readonly string[]> = {
   1: [
-    'You fell for THAT?!',
-    'Gullible as advertised.',
-    'Read the room, genius.',
-    'Hahaha, classic you.',
+    "You're struggling with THIS?",
+    'Was that supposed to be a jump?',
+    'Don’t trust the floor. Or do — it’s funnier.',
+    'Watch your step. Actually, don’t.',
   ],
   2: [
-    'Never seen someone so easily fooled.',
-    'Did you really trust a sign, idiot?',
-    'Hook, line, and complete idiot.',
-    'You walk into traps like it is your job.',
+    "Maybe the controls aren't the problem.",
+    'Impressive. Wrong, but impressive.',
+    'Go on, trust that platform.',
+    'I’m already preparing my next insult.',
   ],
   3: [
-    'Still falling for bait this deep?!',
-    'Brain empty. Pure vibes. Pure death.',
-    'We barely even hid that trap, idiot.',
-    'You never learn. Not even once.',
+    'You have the survival instincts of a potato.',
+    'Even the spikes are getting bored.',
+    'Let’s see how you ruin this run.',
+    'Every move you make is deeply questionable.',
   ],
   4: [
-    '60+ levels in and STILL trusting floors?!',
-    'Your trust issues clearly failed you.',
-    'A sleepy pigeon would have dodged that.',
-    'Humiliating. Truly humiliating.',
+    "I've seen loading screens with better reflexes.",
+    'Your brain really took a day off.',
+    'This is going to end badly. I can tell.',
+    'Zero rhythm. Pure comedy.',
   ],
   5: [
-    'THE 90s AND YOU FELL FOR A BAIT?!',
-    'Pathetic. Back to the abyss, idiot.',
-    'No mercy for gullible clowns.',
-    'You literally begged for that betrayal.',
+    'The checkpoint has seen enough.',
+    'You keep proving me right.',
+    'At this point, failure is your personality.',
+    'Hints vanish after 50. Savor them now.',
   ],
   6: [
-    'BAITED AT THE FINISH LINE?! PATHETIC!',
-    'You trusted THAT on Level 99/100?! IDIOT!',
-    'Hope crushed in 0.1 seconds. Beautiful.',
-    'Hahaha! Try harder, Loser!',
+    'I genuinely expected nothing, yet you disappointed me.',
+    'Your last attempt was somehow better. Barely.',
+    'No hints left. Just pure suffering.',
+    'Watching this requires real patience.',
+  ],
+  7: [
+    "You know what's coming. You still won't survive it.",
+    'I can practically hear your confidence disappearing.',
+    'Go ahead. Make the same mistake again.',
+    'Every pixel ahead is lying to you.',
+  ],
+  8: [
+    "You've made it this far. What a waste of progress.",
+    'I almost respect your persistence. Almost.',
+    'Your suffering is becoming predictable.',
+    'Still refusing to close the tab, huh?',
+  ],
+  9: [
+    'Eighty levels and this is still your performance?',
+    'Perhaps the exit is avoiding you.',
+    'I would wish you luck, but that seems pointless.',
+    'You are way out of your depth here.',
+  ],
+  10: [
+    'So close to the end. Would be a shame to fall.',
+    "You've survived 90 levels just to do THAT?",
+    "Your determination is admirable. Your skills aren't.",
+    'One tiny slip and it all collapses.',
+  ],
+  11: [
+    'Oh, look. The almost-final level. How unfortunate.',
+    "You didn't really think this would be easy?",
+    'One more level. Try not to embarrass yourself.',
+  ],
+  12: [
+    'You actually made it here?',
+    "I wouldn't get comfortable.",
+    "If you win this, I'll have nothing left to insult.",
   ],
 };
 
-const IDLE_INSULTS_BY_TIER: Record<1 | 2 | 3 | 4 | 5 | 6, string[]> = {
-  1: [
-    'Hello? Brain buffering?',
-    'Are we going, or...?',
-    'Scared of a few pixels?',
-    'Fingers still working?',
-  ],
-  2: [
-    'Staring will not move the spikes, idiot.',
-    'Take your time. I am only ink.',
-    'Waiting for a miracle? Keep waiting.',
-    'Afraid to press jump already?',
-  ],
-  3: [
-    'Frozen in fear? Adorable.',
-    'Thinking this hard just to die in 2s.',
-    'Move, idiot. The sweeper is hungry.',
-    'Regretting clicking Play yet?',
-  ],
-  4: [
-    'Hands trembling? Just press Quit.',
-    'Planning another tragic failure?',
-    'Cowardice will not get you to 100.',
-    'All that thinking just to choke anyway.',
-  ],
-  5: [
-    'Terrified of the 90s, idiot?',
-    'Standing still is the longest you’ll live.',
-    'Take a breath. Your death is 2s away.',
-    'Quit staring and go get humiliated.',
-  ],
-  6: [
-    'Scared to move on the final boss, idiot?',
-    'Staring at the impossible won’t beat it.',
-    'Go on. Take one step and die already.',
-    'Sweating yet? You should be.',
-  ],
+const MID_RUN_MOCKERY_BY_ACT: Record<PersonalityAct, readonly string[]> = {
+  1: ['Almost there! Time to trip on nothing.', 'Wait — you’re actually still alive?'],
+  2: ['Don’t get proud yet. The ending bites.', 'Watch you choke right before the door.'],
+  3: ['Another failure incoming in 3... 2...', 'Careful — you usually fold right around here.'],
+  4: ['That was surprisingly decent. Ruins my bet.', 'Choke incoming. I can feel it.'],
+  5: ['Almost to the door — prove me right and fall.', 'You keep proving me right at the finish line.'],
+  6: ['Your last attempt died right around here.', 'No hints left. Don’t blink now.'],
+  7: ['I can practically hear your confidence disappearing.', 'Sure that exit ahead is real?'],
+  8: ['I almost respect your persistence. Almost.', 'What a waste of progress this choke will be.'],
+  9: ['Perhaps the exit is avoiding you.', 'Eighty levels deep — perfect time to slip.'],
+  10: ['So close to the end. Would be a shame to fall.', 'Hands shaking yet? The door is right there.'],
+  11: ['Almost at Level 100. Try not to embarrass yourself.', "You didn't really think this would be easy?"],
+  12: ["I wouldn't get comfortable.", "If you win this, I'll have nothing left to insult."],
 };
 
-const JUMP_SPAM_INSULTS_BY_TIER: Record<1 | 2 | 3 | 4 | 5 | 6, string[]> = {
-  1: ['Easy on jump, kangaroo.', 'Walking exists, you know.'],
-  2: ['Panic hopping already, idiot?', 'Bouncing will not save you.'],
-  3: ['Stop mashing jump like a headless chicken.', 'Spamming jump = spamming death.'],
-  4: ['Pure panic. Zero control. Classic idiot.', 'Your thumb is mashing in pure fear.'],
-  5: ['Mashing jump in the 90s?! Instant funeral.', 'Control yourself or stay dead, idiot.'],
-  6: ['PANIC MASHING ON 99/100?! GOODBYE!', 'Zero composure. Instant death, idiot.'],
+const VICTORY_QUIPS_BY_ACT: Record<PersonalityAct, readonly string[]> = {
+  1: ['Pure luck. Next room will humble you.', 'Cleared? Even a pigeon could do that.'],
+  2: ['Impressive. Ugly, but somehow alive.', 'Survived by pure panic.'],
+  3: ['Even the spikes felt bad and let you pass.', 'Don’t celebrate — you barely scraped through.'],
+  4: ['Took you long enough. Painful to watch.', 'Fluke clear. Next stage will fix that ego.'],
+  5: ['The checkpoint is finally free from you.', 'Cleared, and somehow still unconvincing.'],
+  6: ['Barely better than your last attempt.', 'No hints and you still stumbled across? Lucky.'],
+  7: ['Survived the mind games. For now.', 'Go ahead, feel confident. The next stage loves that.'],
+  8: ['I almost respect your persistence. Almost.', 'One nightmare down. Worse ones waiting.'],
+  9: ['The exit couldn’t outrun you forever, I guess.', 'Still alive past 80? Concerning stubbornness.'],
+  10: ['Final Descent survived... barely.', 'Closer to 99. Your nerves won’t hold.'],
+  11: ['You beat Level 99?! Fine. Enter Level 100 and suffer.'],
+  12: ['WAIT. YOU ACTUALLY BEAT THE GAME? I have nothing left to insult.'],
 };
 
-const MID_RUN_MOCKERY_BY_TIER: Record<1 | 2 | 3 | 4 | 5 | 6, string[]> = {
-  1: ['Watch your step...', 'Don’t get cocky yet.'],
-  2: ['Oh look, still alive. Won’t last.', 'Try not to choke right here, idiot.'],
-  3: ['Halfway there — prime time to choke!', 'Sweating yet? The cruel part starts now.'],
-  4: ['You’re actually surviving? Fixing that soon.', 'Don’t blink, idiot. One mistake = done.'],
-  5: ['Nice progress. Shame you’re about to choke.', 'Hands shaking? Look ahead, idiot!'],
-  6: ['Still alive?! Impossible — watch this trap!', 'DO NOT CHOKE NOW, IDIOT!'],
+const HOME_INSULTS_BY_ACT: Record<PersonalityAct, readonly string[]> = {
+  1: ['Aww, already scared of Level 1?', 'Click Play. Let’s watch you trip.', "You're struggling with THIS?"],
+  2: ["Maybe the controls aren't the problem.", 'Ready to walk straight into another trap?', 'Impressive. Wrong, but impressive.'],
+  3: ['You have the survival instincts of a potato.', 'Even the spikes miss bullying you.', 'Another failure awaits.'],
+  4: ["I've seen loading screens with better reflexes.", 'Ready to embarrass yourself in the 30s?', 'Your brain back from its day off?'],
+  5: ['The checkpoint has seen enough.', 'At this point, failure is your personality.', 'You keep proving me right.'],
+  6: ['No hints left past 50. Good luck.', 'I genuinely expected nothing, yet here you are.', 'Conducting another experiment in failure?'],
+  7: ['I can practically hear your confidence disappearing.', "You know what's coming. You still won't survive it.", 'Go ahead. Press Play.'],
+  8: ["You've made it this far. What a waste of progress.", 'I almost respect your persistence. Almost.', 'Your suffering awaits.'],
+  9: ['Eighty levels and still coming back?', 'Perhaps the exit is avoiding you.', 'I would wish you luck, but that seems pointless.'],
+  10: ['So close to the end. Would be a shame to fall.', "Your determination is admirable. Your skills aren't.", 'The Final Descent is waiting.'],
+  11: ['Oh, look. Level 99. How unfortunate.', "You didn't really think this would be easy?", 'One more level. Try not to embarrass yourself.'],
+  12: ['You actually made it to Level 100?', "I wouldn't get comfortable.", "If you win this, I'll have nothing left to insult."],
 };
 
-// Keep legacy exports for compatibility
-export const STICKMAN_RESPAWN_INSULTS: string[] = RESPAWN_INSULTS_BY_TIER[1];
-export const STICKMAN_TRAP_INSULTS: string[] = TRAP_INSULTS_BY_TIER[1];
-export const STICKMAN_IDLE_INSULTS: string[] = IDLE_INSULTS_BY_TIER[1];
-export const STICKMAN_JUMP_SPAM_INSULTS: string[] = JUMP_SPAM_INSULTS_BY_TIER[1];
-
-export const STICKMAN_HOME_INSULTS: string[] = [
-  'Try harder, Loser! You’re just bad.',
-  '100 cruel levels. You won’t survive 10.',
-  'Level 100 is literally impossible. Dare you.',
-  'Go on, click Play. Humiliate yourself.',
-  'Bet you die on Level 1, idiot.',
-  '99 almost breaks you. 100 ends you.',
-  'If you cross 100, history is made. (You won’t.)',
-];
-
-export const FOURTH_WALL_IDLE_QUIPS = STICKMAN_IDLE_INSULTS;
-export const FOURTH_WALL_DEATH_QUIPS = STICKMAN_RESPAWN_INSULTS;
-
-const VICTORY_QUIPS_BY_TIER: Record<1 | 2 | 3 | 4 | 5 | 6, string[]> = {
-  1: [
-    'Beginner luck. Next room will humble you.',
-    'Fine. Take the win. Do not get cocky, idiot.',
-    'You survived? Must be a glitch.',
-  ],
-  2: [
-    'Suspiciously competent. Fixing that next level.',
-    'Congrats, you cleared the baby part. Barely.',
-    'Enjoy that win. The cruelty ramps hard now.',
-  ],
-  3: [
-    'How did YOU survive that?! Pure accident.',
-    'Okay, mildly annoying. Next stage is way meaner.',
-    'You only beat that by stubborn panic clicking.',
-  ],
-  4: [
-    'Still refusing to quit? Respectfully, stop.',
-    'Every level closer to 99 makes your downfall funnier.',
-    'Fluke run. Try surviving the next nightmare, idiot.',
-  ],
-  5: [
-    'NO WAY you cleared a 90s gatekeeper?!',
-    'Stop smiling. Level 99 & 100 are waiting to crush you.',
-    'Actually terrifying... still betting you choke next.',
-  ],
-  6: [
-    'UNREAL... You actually survived that?!',
-    'Okay, my jaw is on the floor.',
-  ],
-};
-
-export const VICTORY_QUIPS: string[] = VICTORY_QUIPS_BY_TIER[1];
-
-let lastMessageIndex = -1;
-let lastInsultText = '';
-
-export function pickStickmanInsult(pool: string[]): string {
-  if (pool.length === 0) return 'Try harder, Loser!';
-  let idx = Math.floor(Math.random() * pool.length);
-  if (pool[idx] === lastInsultText && pool.length > 1) {
-    idx = (idx + 1) % pool.length;
-  }
-  lastInsultText = pool[idx];
-  return pool[idx];
+export function getHomeStickmanInsults(levelId: number): readonly string[] {
+  return HOME_INSULTS_BY_ACT[getPersonalityAct(levelId)] ?? HOME_INSULTS_BY_ACT[1];
 }
 
 /**
- * Picks a stickman speech-bubble roast whose cruelty escalates relentlessly across Levels 1..100,
- * getting extra vicious on high death streaks and Levels 99 & 100.
+ * Cruel modal roast displayed inside the 'Get Hint' popup (Levels 1–50 ONLY).
  */
+export function getCruelHintModalComment(levelId: number, deathsOnObstacle: number): string {
+  const act = getPersonalityAct(levelId);
+  if (act >= 5) {
+    return deathsOnObstacle >= 5
+      ? `${deathsOnObstacle} deaths on the same obstacle. The checkpoint has seen enough. Watch an ad for a sarcastic hint before hints disappear after Level 50.`
+      : 'At this point, failure is your personality. Watch a rewarded ad to unlock a sarcastic hint (last stretch before hints vanish forever after Level 50).';
+  }
+  if (act === 4) {
+    return deathsOnObstacle >= 5
+      ? `${deathsOnObstacle} fails here? I've seen loading screens with better reflexes. Watch an ad to unlock a mocking hint.`
+      : 'Your brain really took a day off on this jump. Watch a rewarded ad to unlock a sarcastic clue.';
+  }
+  if (act === 3) {
+    return deathsOnObstacle >= 5
+      ? `${deathsOnObstacle} deaths in one spot — even the spikes are getting bored. Watch an ad for a mocking clue.`
+      : 'You have the survival instincts of a potato. Watch a rewarded ad for a sarcastic hint.';
+  }
+  if (act === 2) {
+    return deathsOnObstacle >= 4
+      ? `${deathsOnObstacle} fails already. Maybe the controls aren't the problem. Watch a rewarded ad for a hint.`
+      : 'You saw that coming and still walked into it? Watch an ad to unlock a sarcastic hint.';
+  }
+  return deathsOnObstacle >= 3
+    ? `Aww, already died ${deathsOnObstacle} times here? Watch a rewarded ad to unlock a sarcastic hint.`
+    : "You're struggling with THIS? Watch a rewarded ad to unlock a sarcastic hint.";
+}
+
 export function pickEscalatingStickmanInsult(
   category: StickmanInsultCategory,
   levelId: number,
   levelDeaths = 0,
 ): string {
-  const tier = getCrueltyTier(levelId);
+  const act = getPersonalityAct(levelId);
 
-  if (category === 'respawn') {
-    if (levelId === 100 && Math.random() < 0.85) {
-      return pickStickmanInsult(LEVEL_100_INSULTS);
-    }
-    if (levelId === 99 && Math.random() < 0.82) {
-      return pickStickmanInsult(LEVEL_99_INSULTS);
-    }
-    if (levelDeaths >= 8 && Math.random() < 0.45) {
-      const harshness =
-        levelId >= 60
-          ? [
-              `${levelDeaths} deaths here?! Quit already, idiot.`,
-              `Death #${levelDeaths}. Zero talent detected.`,
-              `${levelDeaths} straight chokes. Truly pathetic.`,
-              `Still dying at #${levelDeaths}? Close the tab.`,
-            ]
-          : [
-              `${levelDeaths} deaths here?! Try harder, Loser!`,
-              `Death #${levelDeaths}. Still zero improvement.`,
-              `${levelDeaths} tries and counting. Embarrassing.`,
-              `Maybe try a coloring book instead, idiot.`,
-            ];
-      return pickStickmanInsult(harshness);
-    }
-    return pickStickmanInsult(RESPAWN_INSULTS_BY_TIER[tier]);
+  if (category === 'checkpoint') {
+    return pickFreshLine(CHECKPOINT_INSULTS_BY_ACT[act]);
   }
-
+  if (category === 'repeat_mistake') {
+    return pickFreshLine(REPEAT_MISTAKE_BY_ACT[act]);
+  }
   if (category === 'trap') {
-    return pickStickmanInsult(TRAP_INSULTS_BY_TIER[tier]);
+    return pickFreshLine(TRAP_INSULTS_BY_ACT[act]);
   }
   if (category === 'idle') {
-    return pickStickmanInsult(IDLE_INSULTS_BY_TIER[tier]);
+    return pickFreshLine(IDLE_INSULTS_BY_ACT[act]);
   }
-  return pickStickmanInsult(JUMP_SPAM_INSULTS_BY_TIER[tier]);
+  if (category === 'jump_spam') {
+    return pickFreshLine(JUMP_SPAM_INSULTS_BY_ACT[act]);
+  }
+
+  // Respawn reaction (cruel from Level 1, contextual to death count & stage)
+  if (levelDeaths === 1 && act === 1) {
+    return pickFreshLine(['Aww, already dead?', 'Was that supposed to be a jump?', "You're struggling with THIS?"]);
+  }
+  if (levelDeaths >= 6 && Math.random() < 0.42) {
+    return pickFreshLine(REPEAT_MISTAKE_BY_ACT[act]);
+  }
+  return pickFreshLine(RESPAWN_INSULTS_BY_ACT[act]);
 }
 
-/**
- * Live mid-run mockery triggered when crossing halfway or nearing the finish on cruel levels.
- */
+export function pickContinuousStickmanComment(
+  levelId: number,
+  levelDeaths = 0,
+  progress = 0,
+): string {
+  const act = getPersonalityAct(levelId);
+  if (progress >= 0.7 && Math.random() < 0.4) {
+    return pickMidRunMockery(levelId, 'late');
+  }
+  if (levelDeaths >= 5 && Math.random() < 0.35) {
+    return pickFreshLine(REPEAT_MISTAKE_BY_ACT[act]);
+  }
+  return pickFreshLine(CONTINUOUS_COMMENTARY_BY_ACT[act]);
+}
+
 export function pickMidRunMockery(levelId: number, stage: 'mid' | 'late'): string {
   if (levelId === 100) {
     return stage === 'mid'
-      ? 'Halfway on 100?! Don’t worry, you’re about to choke!'
-      : 'WAIT — STOP!! NOBODY IS ALLOWED TO CROSS 100!!';
+      ? "I wouldn't get comfortable."
+      : "If you win this, I'll have nothing left to insult.";
   }
   if (levelId === 99) {
     return stage === 'mid'
-      ? 'Halfway on 99... don’t choke now, idiot!'
-      : 'Level 100 is RIGHT THERE — choke incoming!';
+      ? "You didn't really think this would be easy?"
+      : 'One more level. Try not to embarrass yourself.';
   }
-  const tier = getCrueltyTier(levelId);
-  return pickStickmanInsult(MID_RUN_MOCKERY_BY_TIER[tier]);
+  const act = getPersonalityAct(levelId);
+  return pickFreshLine(MID_RUN_MOCKERY_BY_ACT[act]);
 }
 
-/**
- * Opening taunt spoken by the stickman right when entering levels — gets crueler as you climb.
- */
-export function pickLevelEntryTaunt(levelId: number): string | null {
+export function pickLevelEntryTaunt(levelId: number): string {
   if (levelId === 100) {
-    return 'LEVEL 100. ZERO CHECKPOINTS. LITERALLY IMPOSSIBLE, IDIOT.';
+    return 'You actually made it here?';
   }
   if (levelId === 99) {
-    return 'Level 99. Almost at 100... time to choke, idiot.';
+    return 'Oh, look. The almost-final level. How unfortunate.';
   }
-  if (levelId >= 96) {
-    return `Level ${levelId}. Chapter 20 eats idiots alive.`;
+  const stage = getDifficultyStage(levelId);
+  if (levelId === 51) {
+    return 'Level 51. Hints are gone forever. Good luck.';
   }
-  if (levelId >= 90) {
-    return `Level ${levelId}. Final 10. Your ego ends here.`;
+  if (levelId === 18) {
+    return 'Lights out. Hope your memory works better than your jumps.';
   }
-  if (levelId >= 70 && levelId % 5 === 0) {
-    return `Level ${levelId}. Still delusional enough to keep going?`;
-  }
-  if (levelId >= 40 && levelId % 5 === 0) {
-    return `Level ${levelId}. Ready to get humiliated again?`;
-  }
-  if (levelId >= 15 && levelId % 5 === 0) {
-    return `Level ${levelId}. Try harder, Loser!`;
-  }
-  return null;
+  const act = stage.id;
+  if (act === 1) return levelId === 1 ? "You're struggling with THIS already? Let's see." : `Level ${levelId}. Try not to embarrass yourself.`;
+  if (act === 2) return `Level ${levelId}. Maybe the controls aren't the problem.`;
+  if (act === 3) return `Level ${levelId}. Even the spikes are ready for you.`;
+  if (act === 4) return `Level ${levelId}. Let's see if your brain showed up today.`;
+  if (act === 5) return `Level ${levelId}. The checkpoint is already tired of you.`;
+  if (act === 6) return `Level ${levelId}. Zero hints. Pure Ruthlessness.`;
+  if (act === 7) return `Level ${levelId}. I can already hear your confidence slipping.`;
+  if (act === 8) return `Level ${levelId}. Welcome to The Nightmare.`;
+  if (act === 9) return `Level ${levelId}. Eighty-plus levels and zero mercy.`;
+  return `Level ${levelId}. So close to the end. Would be a shame to fall.`;
 }
 
-export function pickDeathMessage(cause: DeathCause, repeatCount: number, levelId = 1): string {
-  if (levelId === 100 && Math.random() < 0.6) {
-    return LEVEL_100_INSULTS[Math.floor(Math.random() * LEVEL_100_INSULTS.length)];
+export function pickDeathMessage(
+  cause: DeathCause,
+  repeatCount: number,
+  levelId = 1,
+  levelDeaths = 1,
+  progress = 0,
+): string {
+  const act = getPersonalityAct(levelId);
+
+  if (levelId === 100) {
+    return pickFreshLine(ACT_DEATH_MESSAGES[12]);
   }
-  if (levelId === 99 && Math.random() < 0.55) {
-    return LEVEL_99_INSULTS[Math.floor(Math.random() * LEVEL_99_INSULTS.length)];
+  if (levelId === 99) {
+    return pickFreshLine(ACT_DEATH_MESSAGES[11]);
   }
-  if (repeatCount >= 3 && Math.random() < 0.65) {
-    return REPEAT_SPOT_MESSAGES[Math.floor(Math.random() * REPEAT_SPOT_MESSAGES.length)];
+  if (act === 1 && levelDeaths === 1) {
+    return pickFreshLine(['Aww, already dead?', 'Was that supposed to be a jump?', "You're struggling with THIS?"]);
+  }
+  if (progress >= 0.74 && Math.random() < 0.5) {
+    return pickFreshLine(MID_RUN_MOCKERY_BY_ACT[act]);
+  }
+  if (repeatCount >= 2 && Math.random() < 0.58) {
+    return pickFreshLine(REPEAT_MISTAKE_BY_ACT[act]);
   }
   const causePool = CAUSE_DEATH_MESSAGES[cause] ?? [];
-  if (causePool.length > 0 && Math.random() < 0.52) {
-    return causePool[Math.floor(Math.random() * causePool.length)];
+  if (causePool.length > 0 && Math.random() < 0.34) {
+    return pickFreshLine(causePool);
   }
-  let idx = Math.floor(Math.random() * GENERAL_DEATH_MESSAGES.length);
-  if (idx === lastMessageIndex) {
-    idx = (idx + 1) % GENERAL_DEATH_MESSAGES.length;
-  }
-  lastMessageIndex = idx;
-  return GENERAL_DEATH_MESSAGES[idx];
+  return pickFreshLine(ACT_DEATH_MESSAGES[act] ?? GENERAL_DEATH_MESSAGES);
 }
 
 export function pickVictoryQuip(deathsInLevel: number, levelId = 1): string {
+  if (levelId === 100) {
+    return 'WAIT. YOU ACTUALLY BEAT THE GAME?';
+  }
   if (levelId === 99) {
-    return 'You ACTUALLY survived Level 99?! Insane... Now meet Level 100, idiot. Literally nobody has ever crossed it.';
+    return 'You survived Level 99?! Fine. Welcome to The Last Level.';
   }
   if (deathsInLevel === 0) {
-    return levelId >= 50
-      ? 'Zero deaths on THIS monster?! Are you even human?!'
-      : 'Zero deaths? Either you have psychic powers or pure dumb luck.';
+    return levelId >= 51
+      ? 'Zero deaths with zero hints? Suspicious.'
+      : 'Zero deaths? Pure luck. Next stage fixes that.';
   }
   if (deathsInLevel >= 15) {
-    return `${deathsInLevel} deaths just for THAT. Sheer stubborn idiocy — honestly, terrifying.`;
+    return `${deathsInLevel} deaths just for THAT. Stubbornness isn’t talent.`;
   }
-  const tier = getCrueltyTier(levelId);
-  const pool = VICTORY_QUIPS_BY_TIER[tier];
-  return pool[Math.floor(Math.random() * pool.length)];
+  return pickFreshLine(VICTORY_QUIPS_BY_ACT[getPersonalityAct(levelId)]);
 }
 
 export type DeathStreakMilestone = 5 | 10 | 20;
@@ -506,92 +731,45 @@ export interface DeathStreakMockery {
   banner: string;
 }
 
-/**
- * Returns increasingly disparaging, milestone-specific stickman mockery
- * whenever the player hits an exact 5, 10, or 20 death streak on a single level.
- */
 export function pickDeathStreakStickmanComment(
   milestone: DeathStreakMilestone,
   levelId: number,
 ): DeathStreakMockery {
   const lvLabel = String(levelId).padStart(2, '0');
-  const isEndgame = levelId >= 99;
+  const act = getPersonalityAct(levelId);
+  const stage = getDifficultyStage(levelId);
 
   if (milestone === 5) {
-    const bubbles = isEndgame
-      ? [
-          `5 straight deaths on Lv ${lvLabel}?! Warm-up over, loser.`,
-          `5x death streak! Already crumbling on Lv ${lvLabel}?`,
-          `Five fails in a row. Your hands are shaking already.`,
-        ]
-      : [
-          `5 deaths in a row on Lv ${lvLabel}?! Are you even trying, Loser?`,
-          `Five straight chokes. Have you tried opening your eyes?`,
-          `5x death streak! Even the spikes are getting bored of you.`,
-          `Five fails straight. My ink dries faster than you learn.`,
-        ];
-    const taunts = [
-      `5 straight deaths on Level ${lvLabel}. At this point, the traps don't even need to try.`,
-      `Five deaths in a row — your muscle memory is actively fighting against you, loser.`,
-      `5-death streak! Have you considered jumping OVER the bright red spikes?`,
-    ];
+    const bubble = pickFreshLine(REPEAT_MISTAKE_BY_ACT[act]);
+    const taunt =
+      act >= 11
+        ? `5 straight deaths on Level ${lvLabel}. You didn't really think this would be easy?`
+        : `5 straight deaths on Level ${lvLabel}. ${pickFreshLine(ACT_DEATH_MESSAGES[act])}`;
     return {
       milestone: 5,
-      bubble: pickStickmanInsult(bubbles),
-      taunt: taunts[levelId % taunts.length],
-      banner: `5x DEATH STREAK ON LV ${lvLabel} · EMBARRASSING`,
+      bubble,
+      taunt,
+      banner: `5x DEATH STREAK · ${stage.name.toUpperCase()}`,
     };
   }
 
   if (milestone === 10) {
-    const bubbles = isEndgame
-      ? [
-          `10 STRAIGHT DEATHS ON LV ${lvLabel}?! Just surrender, idiot.`,
-          `Double-digit fails here. You are NOT built for Lv ${lvLabel}.`,
-          `10x streak! Watching you fold at the finish line is pure comedy.`,
-        ]
-      : [
-          `10 STRAIGHT DEATHS?! Delete your hands and start over, idiot.`,
-          `Double-digit fails on Lv ${lvLabel}. Certified clown behavior.`,
-          `10x death streak! The spikes aren't even moving, loser.`,
-          `Ten in a row. Watching you play is a crime against stickmen.`,
-        ];
-    const taunts = [
-      `10 deaths in a row on Level ${lvLabel}. Statistically, a blindfolded pigeon would have accidentally cleared this by now.`,
-      `Double-digit death streak! Every single attempt is somehow worse than the last, idiot.`,
-      `10 straight failures on Level ${lvLabel}. Your ego is writing checks your thumbs cannot cash.`,
-    ];
+    const bubble = pickFreshLine(RESPAWN_INSULTS_BY_ACT[act]);
+    const taunt = `10 straight failures on Level ${lvLabel}. ${pickFreshLine(ACT_DEATH_MESSAGES[act])}`;
     return {
       milestone: 10,
-      bubble: pickStickmanInsult(bubbles),
-      taunt: taunts[levelId % taunts.length],
-      banner: `10x DEATH STREAK ON LV ${lvLabel} · DOUBLE-DIGIT HUMILIATION`,
+      bubble,
+      taunt,
+      banner: `10x DEATH STREAK · DOUBLE-DIGIT FAILURE`,
     };
   }
 
-  // 20-Death Streak: Nuclear existential disrespect
-  const bubbles = isEndgame
-    ? [
-        `20 STRAIGHT DEATHS ON LV ${lvLabel}?! CLOSE THE TAB, LOSER.`,
-        `TWENTY FAILS IN A ROW! Give up — you will NEVER cross this.`,
-        `20x streak on Lv ${lvLabel}. Pure, unfiltered delusion.`,
-      ]
-    : [
-        `20 DEATHS IN A ROW?! Close the game and salvage your dignity.`,
-        `TWENTY straight fails on Lv ${lvLabel}! Actually hopeless, Loser.`,
-        `20x death streak. I am 6 lines of ink begging you to quit.`,
-        `20 consecutive deaths! You are just feeding the traps now, idiot.`,
-      ];
-  const taunts = [
-    `20 straight deaths on Level ${lvLabel}. Not a single neuron fired in twenty consecutive attempts. Just quit.`,
-    `TWENTY-DEATH STREAK! At this point, you're not playing Try harder, Loser! — you ARE the punchline.`,
-    `20 failures in a row on Level ${lvLabel}. Please step away from the controls before the stickman files a restraining order.`,
-  ];
+  const bubble = pickFreshLine(ACT_DEATH_MESSAGES[act]);
+  const taunt = `20 straight deaths on Level ${lvLabel}. At this point, failure is your personality.`;
   return {
     milestone: 20,
-    bubble: pickStickmanInsult(bubbles),
-    taunt: taunts[levelId % taunts.length],
-    banner: `20x DEATH STREAK ON LV ${lvLabel} · PURE DELUSION`,
+    bubble,
+    taunt,
+    banner: `20x DEATH STREAK · PURE STUBBORNNESS`,
   };
 }
-

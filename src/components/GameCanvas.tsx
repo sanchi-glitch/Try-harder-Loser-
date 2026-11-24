@@ -2,10 +2,12 @@ import {
   ArrowLeft,
   ArrowRight,
   ArrowUp,
+  CheckCircle2,
   Grid,
   Heart,
   Home,
   Lightbulb,
+  Lock,
   Menu,
   Play,
   RotateCcw,
@@ -15,19 +17,26 @@ import {
   X,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+import { type DeathStreakMilestone } from '../data/deathMessages';
+import { getDifficultyStage } from '../data/difficultyStages';
+import { getPrimaryLevelHint, HINT_SYSTEM_MAX_LEVEL } from '../data/hintClues';
+import { getLevelById, LEVELS } from '../data/levels';
 import {
-  getDeathStreakMilestone,
-  pickDeathStreakStickmanComment,
-  type DeathStreakMilestone,
-} from '../data/deathMessages';
-import { HINT_SYSTEM_MAX_LEVEL } from '../data/hintClues';
-import { LEVELS } from '../data/levels';
-import { getRandomDeathTaunt } from '../data/taunts';
+  SARCASTIC_HINT_MAX_LEVEL,
+  SARCASTIC_HINT_MIN_OBSTACLE_DEATHS,
+  SARCASTIC_LEVEL_HINTS,
+} from '../data/sarcasticLevelHints';
 import { adMobService } from '../engine/adMobService';
 import { audioManager } from '../engine/audio';
-import { PlatformerEngine } from '../engine/gameEngine';
+import { commentaryService } from '../engine/commentaryService';
+import { PlatformerEngine, type DarknessRenderFrame } from '../engine/gameEngine';
 import { formatTimeMs } from '../engine/saveManager';
-import type { DeathLocationSnapshot, GameSettings, HudSnapshot } from '../types/game';
+import type {
+  DeathLocationSnapshot,
+  GameSettings,
+  HudSnapshot,
+  UsedLevelHint,
+} from '../types/game';
 
 interface GameCanvasProps {
   levelId: number;
@@ -50,8 +59,504 @@ interface GameCanvasProps {
     tricksTriggeredInLevel: number;
   }) => void;
   onHintAdStateChange?: (active: boolean) => void;
+  usedLevelHint?: UsedLevelHint | null;
+  onHintUnlocked?: (levelId: number, hint: UsedLevelHint) => void;
   restartToken: number;
   deathAction: { id: number; type: 'respawn_exact' | 'restart_after_death' };
+}
+
+/** Duration (ms) the Hint button blinks to catch the player's eye when available (10 seconds). */
+export const HINT_BUTTON_BLINK_MS = 10000;
+/** Hints are strictly available for Levels 1–50 and disabled for all levels > 50. */
+export const STRICT_HINT_MAX_LEVEL = Math.min(
+  50,
+  HINT_SYSTEM_MAX_LEVEL,
+  SARCASTIC_HINT_MAX_LEVEL,
+);
+
+export interface HintDisplayState {
+  /** Strictly true only for Levels 1–50; always false for levels > 50. */
+  enabled: boolean;
+  /** Whether the player has completed a rewarded ad for this level's hint. */
+  hasWatchedRewardAd: boolean;
+  /** True only when level <= 50 AND the player has watched the reward ad. */
+  canShowLevelHint: boolean;
+  /** The exact hint the player already unlocked for this level (available to re-view anytime). */
+  takenHint: UsedLevelHint | null;
+  /** Whether the top-bar Hint / View Hint button should be displayed. */
+  showHeaderButton: boolean;
+  /** Whether the floating bottom Hint / View Hint button should be displayed. */
+  showFloatingButton: boolean;
+  /** True during the 10-second blink window when an unclaimed hint is available. */
+  shouldBlink: boolean;
+  /** Effective display mode for hint controls. */
+  mode: 'disabled' | 'watch_ad' | 'view_taken';
+}
+
+export interface ResolveHintDisplayParams {
+  levelId: number;
+  hudLevelId: number;
+  paused: boolean;
+  hasAvailableHint: boolean;
+  hasObstacleHint: boolean;
+  hasRepeatObstacleFail: boolean;
+  savedHint: UsedLevelHint | null;
+  isBlinking: boolean;
+  isAdLoading: boolean;
+}
+
+/**
+ * Pure `hintDisplay` state resolver:
+ * - Strictly disables all hint functionality whenever levelId > 50 (or hudLevelId > 50).
+ * - Requires a completed reward ad before allowing the level hint to be shown.
+ * - Preserves access to re-view the exact hint the player has already taken for that level.
+ * - Blinks the hint button for 10 seconds when an unclaimed hint becomes available.
+ */
+export function resolveHintDisplay(params: ResolveHintDisplayParams): HintDisplayState {
+  const {
+    levelId,
+    hudLevelId,
+    paused,
+    hasAvailableHint,
+    hasObstacleHint,
+    hasRepeatObstacleFail,
+    savedHint,
+    isBlinking,
+    isAdLoading,
+  } = params;
+
+  // Strict conditional check: disable ALL hint functionality for levels > 50
+  if (
+    levelId < 1 ||
+    levelId > STRICT_HINT_MAX_LEVEL ||
+    hudLevelId < 1 ||
+    hudLevelId > STRICT_HINT_MAX_LEVEL
+  ) {
+    return {
+      enabled: false,
+      hasWatchedRewardAd: false,
+      canShowLevelHint: false,
+      takenHint: null,
+      showHeaderButton: false,
+      showFloatingButton: false,
+      shouldBlink: false,
+      mode: 'disabled',
+    };
+  }
+
+  const hasWatchedRewardAd = Boolean(savedHint);
+  const canShowLevelHint = hasWatchedRewardAd;
+  const shouldBlink = !paused && !isAdLoading && !hasWatchedRewardAd && isBlinking;
+
+  return {
+    enabled: true,
+    hasWatchedRewardAd,
+    canShowLevelHint,
+    takenHint: savedHint,
+    showHeaderButton: hasWatchedRewardAd || hasAvailableHint,
+    showFloatingButton: !paused && hasRepeatObstacleFail && hasObstacleHint,
+    shouldBlink,
+    mode: hasWatchedRewardAd ? 'view_taken' : 'watch_ad',
+  };
+}
+
+/** Specific levels that activate the high-intensity radial-gradient darkness effect. */
+export const HIGH_INTENSITY_DARKNESS_LEVEL_IDS: ReadonlySet<number> = new Set(
+  LEVELS.filter((lvl) => typeof lvl.spotlightRadius === 'number' && lvl.spotlightRadius > 0).map(
+    (lvl) => lvl.id,
+  ),
+);
+
+/** Returns true when the given level uses the high-intensity darkness mask. */
+export function isHighIntensityDarknessLevel(levelId: number): boolean {
+  return HIGH_INTENSITY_DARKNESS_LEVEL_IDS.has(levelId);
+}
+
+/**
+ * High-Intensity Darkness Renderer (single-pass radial gradient mask).
+ *
+ * Preserves 60fps performance by using a radial gradient fill directly on the main
+ * 2D canvas context (zero offscreen canvases, zero per-pixel loops):
+ * - Activates strictly on designated darkness levels.
+ * - Tight player-centered visibility radius (nudged slightly forward in facing direction)
+ *   that tightens progressively on deeper blackout levels (52+).
+ * - Near-zero ambient light outside the visibility cone (0.996–0.999 pitch-black void).
+ * - Subtle unstable torch breathing + controlled micro-flicker without brightening the outer void.
+ * - Faint crimson proximity rim warning only when an unexpected hazard enters close range.
+ */
+export function renderHighIntensityDarknessMask(
+  ctx: CanvasRenderingContext2D,
+  frame: DarknessRenderFrame,
+): void {
+  const {
+    levelId,
+    playerScreenX,
+    playerScreenY,
+    facing,
+    baseRadius,
+    viewWidth,
+    viewHeight,
+    worldTime,
+    flashAlpha,
+    nearestHazardDistance,
+    proximityRevealRadius,
+  } = frame;
+
+  if (!isHighIntensityDarknessLevel(levelId) || baseRadius <= 0) {
+    return;
+  }
+
+  // Deep blackout levels (52+) tighten the visibility cone and push outer darkness to pure pitch black
+  const isDeepBlackout = levelId >= 52;
+  const depthTighten = isDeepBlackout ? 0.94 : 1.0;
+
+  // Subtle organic flicker on the tight cone; outer ambient light remains virtually zero
+  const breathing = 1 + Math.sin(worldTime * 3.4) * 0.022 + Math.sin(worldTime * 9.7) * 0.01;
+  const microPulse = flashAlpha > 0.04 ? Math.min(0.12, flashAlpha * 0.4) : 0;
+  const effectiveRadius = Math.max(58, baseRadius * depthTighten * (breathing + microPulse));
+
+  // Nudge light center slightly ahead of facing so immediate footing stays readable yet claustrophobic
+  const cx = playerScreenX + facing * 10;
+  const cy = playerScreenY;
+
+  const innerClearRadius = Math.max(12, effectiveRadius * (isDeepBlackout ? 0.16 : 0.2));
+  const outerBlackoutRadius = Math.max(
+    innerClearRadius + 24,
+    effectiveRadius * (isDeepBlackout ? 1.02 : 1.08),
+  );
+
+  // Near-zero ambient light outside the player's visibility radius (0.997–0.999 pitch black)
+  const outerAlpha = Math.max(0.98, (isDeepBlackout ? 0.999 : 0.996) - microPulse * 0.12);
+  const nearEdgeAlpha = Math.max(0.94, (isDeepBlackout ? 0.982 : 0.968) - microPulse * 0.15);
+  const midFalloffAlpha = Math.max(0.76, (isDeepBlackout ? 0.87 : 0.82) - microPulse * 0.2);
+
+  ctx.save();
+
+  // Primary high-intensity radial gradient mask
+  const maskGrad = ctx.createRadialGradient(
+    cx,
+    cy,
+    innerClearRadius,
+    cx,
+    cy,
+    outerBlackoutRadius,
+  );
+  maskGrad.addColorStop(0, 'rgba(2, 2, 4, 0.00)');
+  maskGrad.addColorStop(0.28, 'rgba(2, 2, 4, 0.22)');
+  maskGrad.addColorStop(0.58, `rgba(2, 2, 4, ${midFalloffAlpha.toFixed(3)})`);
+  maskGrad.addColorStop(0.82, `rgba(1, 1, 3, ${nearEdgeAlpha.toFixed(3)})`);
+  maskGrad.addColorStop(1, `rgba(1, 1, 3, ${outerAlpha.toFixed(3)})`);
+
+  ctx.fillStyle = maskGrad;
+  ctx.fillRect(0, 0, viewWidth, viewHeight);
+
+  // Subtle close-proximity crimson danger rim when an unexpected obstacle emerges right beside the player
+  if (
+    Number.isFinite(nearestHazardDistance) &&
+    nearestHazardDistance < proximityRevealRadius
+  ) {
+    const dangerIntensity = Math.max(
+      0,
+      Math.min(1, 1 - nearestHazardDistance / Math.max(1, proximityRevealRadius)),
+    );
+    const glintAlpha = dangerIntensity * dangerIntensity * 0.24;
+    if (glintAlpha > 0.015) {
+      const dangerGrad = ctx.createRadialGradient(
+        cx,
+        cy,
+        effectiveRadius * 0.5,
+        cx,
+        cy,
+        outerBlackoutRadius * 1.04,
+      );
+      dangerGrad.addColorStop(0, 'rgba(220, 38, 38, 0)');
+      dangerGrad.addColorStop(0.68, `rgba(220, 38, 38, ${glintAlpha.toFixed(3)})`);
+      dangerGrad.addColorStop(1, 'rgba(220, 38, 38, 0)');
+      ctx.fillStyle = dangerGrad;
+      ctx.fillRect(0, 0, viewWidth, viewHeight);
+    }
+  }
+
+  ctx.restore();
+}
+
+export interface SelectSarcasticHintOptions {
+  lastHint?: string | null;
+  obstacleIndex?: number;
+}
+
+/**
+ * Selects a level-specific sarcastic, mocking hint for Levels 1–50.
+ * Returns null for levels above 50 or when hint data is unavailable,
+ * and avoids repeating the most recently displayed hint consecutively.
+ */
+export function selectSarcasticLevelHint(
+  levelId: number,
+  options?: SelectSarcasticHintOptions,
+): string | null {
+  if (
+    !Number.isInteger(levelId) ||
+    levelId < 1 ||
+    levelId > SARCASTIC_HINT_MAX_LEVEL
+  ) {
+    return null;
+  }
+
+  const levelHints = SARCASTIC_LEVEL_HINTS[levelId];
+  if (!Array.isArray(levelHints) || levelHints.length === 0) {
+    return null;
+  }
+
+  const lastHint = options?.lastHint ?? null;
+  const rawIndex = options?.obstacleIndex;
+
+  if (typeof rawIndex === 'number' && Number.isFinite(rawIndex) && rawIndex >= 0) {
+    const preferred = levelHints[Math.floor(rawIndex) % levelHints.length];
+    if (preferred && preferred !== lastHint) {
+      return preferred;
+    }
+  }
+
+  const nonRepeating = levelHints.filter((hint) => hint !== lastHint);
+  const pool = nonRepeating.length > 0 ? nonRepeating : levelHints;
+  const pickIndex = Math.floor(Math.random() * pool.length);
+  return pool[pickIndex] ?? null;
+}
+
+export interface GetHintModalProps {
+  isOpen: boolean;
+  levelId: number;
+  levelNumPadded: string;
+  levelName: string;
+  sarcasticHint: string;
+  clueText: string;
+  adaptiveNote: string | null;
+  deathsOnObstacle: number;
+  isUnlocked: boolean;
+  isReviewingSavedHint?: boolean;
+  isAdLoading: boolean;
+  adNotice: string | null;
+  onWatchAd: () => void;
+  onClose: () => void;
+}
+
+/**
+ * 'Get Hint' Modal Component (Levels 1–50):
+ * Presents the selected sarcastic mocking hint gated behind a rewarded ad.
+ * Once unlocked for a level, the player can re-open and view their used hint
+ * for that particular level anytime without watching another ad.
+ */
+export function GetHintModal({
+  isOpen,
+  levelId,
+  levelNumPadded,
+  levelName,
+  sarcasticHint,
+  clueText,
+  adaptiveNote,
+  deathsOnObstacle,
+  isUnlocked,
+  isReviewingSavedHint = false,
+  isAdLoading,
+  adNotice,
+  onWatchAd,
+  onClose,
+}: GetHintModalProps) {
+  if (!isOpen || levelId < 1 || levelId > STRICT_HINT_MAX_LEVEL) return null;
+
+  const isHighCrueltyLevel = levelId >= 21;
+  const unlockedLabel = isReviewingSavedHint
+    ? 'Used Hint · Already Unlocked'
+    : levelId >= 31
+      ? 'Brutal Sarcastic Hint Unlocked'
+      : levelId >= 21
+        ? 'Cruel Sarcastic Hint Unlocked'
+        : 'Sarcastic Hint Unlocked';
+
+  const normalizedSarcastic = sarcasticHint.trim();
+  const normalizedClue = clueText.trim();
+  const normalizedAdaptive = adaptiveNote?.trim() ?? '';
+
+  const showObstacleClue =
+    normalizedClue.length > 0 && normalizedClue !== normalizedSarcastic;
+  const showAdaptiveNote =
+    normalizedAdaptive.length > 0 &&
+    normalizedAdaptive !== normalizedSarcastic &&
+    normalizedAdaptive !== normalizedClue;
+
+  return (
+    <div
+      className="fixed inset-0 z-40 flex items-center justify-center bg-[#111111]/65 p-3 sm:p-5"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="get-hint-modal-title"
+      onClick={(e) => {
+        if (e.target === e.currentTarget && !isAdLoading) {
+          onClose();
+        }
+      }}
+    >
+      <div className="w-full max-w-md max-h-[92%] overflow-y-auto touch-pan-y rounded-xl bg-[#F5F3EE] border-2 border-[#111111] shadow-[6px_6px_0px_#111111] p-4 sm:p-5 text-[#111111]">
+        {/* Header */}
+        <div className="flex items-start justify-between gap-3 pb-3 border-b border-[#111111]/12">
+          <div>
+            <div className="inline-flex items-center gap-1.5 text-[11px] font-mono-tabular font-bold text-[#DC2626] uppercase">
+              <Lightbulb className="w-3.5 h-3.5" />
+              <span>
+                {isReviewingSavedHint ? 'SAVED HINT' : 'GET HINT'} · LEVEL {levelNumPadded}
+              </span>
+            </div>
+            <h2
+              id="get-hint-modal-title"
+              className="font-display font-extrabold text-lg sm:text-xl tracking-tight leading-tight mt-0.5"
+            >
+              {levelName}
+            </h2>
+          </div>
+          <button
+            type="button"
+            disabled={isAdLoading}
+            onClick={onClose}
+            aria-label="Close Get Hint modal"
+            className="h-8 w-8 flex items-center justify-center rounded-lg border border-[#111111]/20 bg-[#FFFFFF] text-[#111111] hover:border-[#111111] disabled:opacity-45 disabled:cursor-not-allowed cursor-pointer shrink-0"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {!isUnlocked ? (
+          /* Locked State: Rewarded Ad Gate */
+          <div className="pt-3.5 space-y-3.5">
+            <p className="text-xs sm:text-sm text-[#44403C] leading-relaxed">
+              {commentaryService.getHintModalRemark(levelId, deathsOnObstacle)}
+            </p>
+
+            <div className="rounded-lg border border-dashed border-[#111111]/35 bg-[#FFFFFF]/85 px-3.5 py-3 flex items-center justify-between gap-2.5 text-[#57534E]">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <Lock className="w-4 h-4 text-[#DC2626] shrink-0" />
+                <span className="text-[11px] font-mono-tabular leading-snug">
+                  SARCASTIC HINT LOCKED · Watch a rewarded ad to unlock
+                </span>
+              </div>
+              {deathsOnObstacle > 0 && (
+                <span className="shrink-0 text-[10px] font-mono-tabular font-bold text-[#DC2626] bg-[#FEF2F2] border border-[#DC2626]/30 px-1.5 py-0.5 rounded">
+                  {deathsOnObstacle}×
+                </span>
+              )}
+            </div>
+
+            {adNotice && (
+              <div
+                role="status"
+                aria-live="polite"
+                className="rounded-lg border border-[#DC2626]/40 bg-[#FEF2F2] px-3 py-2 text-[11px] font-mono-tabular font-semibold text-[#DC2626]"
+              >
+                {adNotice}
+              </div>
+            )}
+
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-1">
+              <button
+                type="button"
+                disabled={isAdLoading}
+                onClick={onWatchAd}
+                className={`flex-1 inline-flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg bg-[#111111] text-[#F5F3EE] font-display font-bold text-xs sm:text-sm shadow-[2px_2px_0px_#DC2626] hover:bg-[#DC2626] transition-colors ${
+                  isAdLoading ? 'opacity-65 cursor-wait' : 'cursor-pointer'
+                }`}
+              >
+                <Play className="w-3.5 h-3.5 fill-current" />
+                {isAdLoading ? 'Loading Rewarded Ad...' : 'Watch Ad to Unlock Hint'}
+              </button>
+
+              <button
+                type="button"
+                disabled={isAdLoading}
+                onClick={onClose}
+                className="py-2.5 px-4 rounded-lg border border-[#111111]/25 bg-[#FFFFFF] text-[#111111] font-display font-bold text-xs sm:text-sm hover:border-[#111111] disabled:opacity-45 disabled:cursor-not-allowed transition-colors cursor-pointer"
+              >
+                Never Mind
+              </button>
+            </div>
+          </div>
+        ) : (
+          /* Unlocked State: Selected Sarcastic Mocking Hint Revealed */
+          <div className="pt-3.5 space-y-3.5">
+            <div
+              className={`rounded-lg border-2 p-3.5 space-y-2.5 ${
+                isHighCrueltyLevel
+                  ? 'border-[#DC2626] bg-[#111111] text-[#F5F3EE] shadow-[3px_3px_0px_rgba(220,38,38,0.4)]'
+                  : 'border-[#111111] bg-[#FFFFFF] text-[#111111] shadow-[3px_3px_0px_rgba(220,38,38,0.25)]'
+              }`}
+            >
+              <div className="inline-flex items-center gap-1.5 text-[10px] font-mono-tabular font-bold uppercase tracking-wider text-[#DC2626]">
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                <span>{unlockedLabel}</span>
+              </div>
+
+              <p
+                className={`text-sm sm:text-[15px] font-display font-bold leading-snug ${
+                  isHighCrueltyLevel ? 'text-[#F5F3EE]' : 'text-[#111111]'
+                }`}
+              >
+                &ldquo;{normalizedSarcastic}&rdquo;
+              </p>
+
+              {showObstacleClue && (
+                <div
+                  className={`pt-2.5 border-t text-xs font-mono-tabular leading-relaxed ${
+                    isHighCrueltyLevel
+                      ? 'border-[#F5F3EE]/15 text-[#D6D3D1]'
+                      : 'border-[#111111]/12 text-[#44403C]'
+                  }`}
+                >
+                  <span
+                    className={`font-bold ${
+                      isHighCrueltyLevel ? 'text-[#F5F3EE]' : 'text-[#111111]'
+                    }`}
+                  >
+                    Obstacle Clue:{' '}
+                  </span>
+                  {normalizedClue}
+                </div>
+              )}
+
+              {showAdaptiveNote && (
+                <div
+                  className={`pt-2 border-t text-[11px] font-mono-tabular ${
+                    isHighCrueltyLevel
+                      ? 'border-[#F5F3EE]/12 text-[#A8A29E]'
+                      : 'border-[#111111]/10 text-[#57534E]'
+                  }`}
+                >
+                  <span
+                    className={`font-bold ${
+                      isHighCrueltyLevel ? 'text-[#F5F3EE]' : 'text-[#111111]'
+                    }`}
+                  >
+                    Adaptive Note:{' '}
+                  </span>
+                  {normalizedAdaptive}
+                </div>
+              )}
+            </div>
+
+            <p className="text-[11px] text-[#57534E]">
+              Saved for Level {levelNumPadded}. You can tap &ldquo;View Hint&rdquo; anytime on this
+              level to read it again.
+            </p>
+
+            <button
+              type="button"
+              onClick={onClose}
+              className="w-full inline-flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg bg-[#111111] text-[#F5F3EE] font-display font-bold text-xs sm:text-sm shadow-[2px_2px_0px_#DC2626] hover:bg-[#DC2626] transition-colors cursor-pointer"
+            >
+              Got It — Back to Game
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
 
 export function GameCanvas({
@@ -69,6 +574,8 @@ export function GameCanvas({
   onTrickTriggered,
   onLevelComplete,
   onHintAdStateChange,
+  usedLevelHint,
+  onHintUnlocked,
   restartToken,
   deathAction,
 }: GameCanvasProps) {
@@ -114,31 +621,165 @@ export function GameCanvas({
     obstacleHint: null,
   });
 
-  // Levels 1–30 Rewarded-Ad-Gated Hint State (unlocked strictly after verified rewarded ad completion)
-  const [unlockedHintKeys, setUnlockedHintKeys] = useState<string[]>([]);
-  const [dismissedHintKeys, setDismissedHintKeys] = useState<string[]>([]);
+  // Levels 1–50 Rewarded-Ad-Gated 'Get Hint' Modal State
+  // Hints unlock strictly after verified rewarded ad completion; once taken for a level,
+  // the player can re-open and view their used hint for that level anytime without another ad.
+  const [localUsedHintsByLevel, setLocalUsedHintsByLevel] = useState<
+    Record<number, UsedLevelHint>
+  >({});
+  const [hintModalOpen, setHintModalOpen] = useState(false);
+  const [isReviewingSavedHint, setIsReviewingSavedHint] = useState(false);
+  const [activeHintModalTarget, setActiveHintModalTarget] = useState<{
+    levelId: number;
+    obstacleKey: string;
+    sarcasticHint: string;
+    clueText: string;
+    adaptiveText: string | null;
+    deathsOnObstacle: number;
+  } | null>(null);
   const [hintAdLoading, setHintAdLoading] = useState(false);
   const [hintAdNotice, setHintAdNotice] = useState<string | null>(null);
   const [hintNotifyBurstId, setHintNotifyBurstId] = useState(0);
-  const lastAvailableHintKeyRef = useRef<string | null>(null);
+  const [isHintButtonBlinking, setIsHintButtonBlinking] = useState(false);
+  const blinkedHintKeysRef = useRef<Set<string>>(new Set());
   const hintNoticeTimerRef = useRef<number | null>(null);
+  const hintBlinkTimerRef = useRef<number | null>(null);
+  const hintBlinkRemainingMsRef = useRef<number>(0);
+  const hintBlinkStartedAtRef = useRef<number | null>(null);
+  const hintBlinkActiveKeyRef = useRef<string | null>(null);
+  const lastSarcasticTextRef = useRef<string | null>(null);
 
-  const activeLockedHintKey =
-    !paused &&
+  // Sync persisted per-level hint prop into local cache (and clear if progress was reset)
+  useEffect(() => {
+    if (usedLevelHint === undefined) return;
+    setLocalUsedHintsByLevel((prev) => {
+      if (usedLevelHint === null) {
+        if (!(levelId in prev)) return prev;
+        const next = { ...prev };
+        delete next[levelId];
+        return next;
+      }
+      if (prev[levelId] === usedLevelHint) return prev;
+      return { ...prev, [levelId]: usedLevelHint };
+    });
+  }, [levelId, usedLevelHint]);
+
+  const stopHintButtonBlink = (resetRemaining = true) => {
+    if (hintBlinkTimerRef.current !== null) {
+      window.clearTimeout(hintBlinkTimerRef.current);
+      hintBlinkTimerRef.current = null;
+    }
+    if (!resetRemaining && hintBlinkStartedAtRef.current !== null) {
+      const elapsed = Date.now() - hintBlinkStartedAtRef.current;
+      hintBlinkRemainingMsRef.current = Math.max(0, hintBlinkRemainingMsRef.current - elapsed);
+    } else if (resetRemaining) {
+      hintBlinkRemainingMsRef.current = 0;
+      hintBlinkActiveKeyRef.current = null;
+    }
+    hintBlinkStartedAtRef.current = null;
+    setIsHintButtonBlinking(false);
+  };
+
+  const isLevelWithinHintCap =
+    levelId >= 1 &&
+    levelId <= STRICT_HINT_MAX_LEVEL &&
     hud.levelId >= 1 &&
-    hud.levelId <= HINT_SYSTEM_MAX_LEVEL &&
-    (hud.levelDeaths > 0 || hud.levelDeathStreak > 0) &&
+    hud.levelId <= STRICT_HINT_MAX_LEVEL;
+  const currentLevelDef = getLevelById(hud.levelId);
+  const fallbackPrimaryHint = isLevelWithinHintCap ? getPrimaryLevelHint(currentLevelDef) : null;
+  const effectiveHint = isLevelWithinHintCap ? (hud.obstacleHint ?? fallbackPrimaryHint) : null;
+
+  const savedHintForCurrentLevel: UsedLevelHint | null = isLevelWithinHintCap
+    ? (hud.levelId === levelId && usedLevelHint !== undefined
+        ? (usedLevelHint ?? localUsedHintsByLevel[hud.levelId] ?? null)
+        : (localUsedHintsByLevel[hud.levelId] ?? null))
+    : null;
+
+  const hasRepeatObstacleFail = Boolean(
+    isLevelWithinHintCap &&
+      hud.obstacleHint &&
+      (hud.obstacleHint.isRepeatObstacleFail ||
+        hud.obstacleHint.deathsOnObstacle >= SARCASTIC_HINT_MIN_OBSTACLE_DEATHS),
+  );
+
+  // Unified `hintDisplay` state: checks reward ad unlock, 10s blink window, taken-hint re-view,
+  // and strictly disables all hint functionality for levels > 50.
+  const hintDisplay = resolveHintDisplay({
+    levelId,
+    hudLevelId: hud.levelId,
+    paused,
+    hasAvailableHint: Boolean(effectiveHint),
+    hasObstacleHint: Boolean(hud.obstacleHint),
+    hasRepeatObstacleFail,
+    savedHint: savedHintForCurrentLevel,
+    isBlinking: isHintButtonBlinking,
+    isAdLoading: hintAdLoading,
+  });
+
+  const eligibleLockedHintKey =
+    hintDisplay.enabled &&
+    hasRepeatObstacleFail &&
     hud.obstacleHint &&
-    !unlockedHintKeys.includes(hud.obstacleHint.obstacleKey)
+    !hintDisplay.hasWatchedRewardAd
       ? hud.obstacleHint.obstacleKey
       : null;
 
+  // Strictly disable all hint UI & timers whenever level > 50
   useEffect(() => {
-    if (activeLockedHintKey && activeLockedHintKey !== lastAvailableHintKeyRef.current) {
+    if (!hintDisplay.enabled) {
+      stopHintButtonBlink(true);
+      setHintModalOpen(false);
+      setActiveHintModalTarget(null);
+      setHintAdNotice(null);
+    }
+  }, [hintDisplay.enabled]);
+
+  // Blink the Hint button for exactly 10 seconds of active gameplay when an obstacle hint becomes
+  // available (Levels 1–50 only), pausing/resuming cleanly across Death Screen or Pause overlays.
+  // Hints NEVER pop out automatically — the player must tap the button and complete a rewarded ad.
+  useEffect(() => {
+    if (!eligibleLockedHintKey || !hintDisplay.enabled) {
+      stopHintButtonBlink(true);
+      return;
+    }
+
+    if (paused) {
+      stopHintButtonBlink(false);
+      return;
+    }
+
+    // First time this obstacle hint becomes available: arm a fresh 10-second blink window
+    if (!blinkedHintKeysRef.current.has(eligibleLockedHintKey)) {
+      blinkedHintKeysRef.current.add(eligibleLockedHintKey);
+      hintBlinkActiveKeyRef.current = eligibleLockedHintKey;
+      hintBlinkRemainingMsRef.current = HINT_BUTTON_BLINK_MS;
       setHintNotifyBurstId((n) => n + 1);
     }
-    lastAvailableHintKeyRef.current = activeLockedHintKey;
-  }, [activeLockedHintKey]);
+
+    // Only blink if this key still has remaining time in its 10-second window
+    if (
+      hintBlinkActiveKeyRef.current === eligibleLockedHintKey &&
+      hintBlinkRemainingMsRef.current > 0
+    ) {
+      const remainingMs = hintBlinkRemainingMsRef.current;
+      hintBlinkStartedAtRef.current = Date.now();
+      setIsHintButtonBlinking(true);
+      if (hintBlinkTimerRef.current !== null) {
+        window.clearTimeout(hintBlinkTimerRef.current);
+      }
+      hintBlinkTimerRef.current = window.setTimeout(() => {
+        hintBlinkTimerRef.current = null;
+        hintBlinkStartedAtRef.current = null;
+        hintBlinkRemainingMsRef.current = 0;
+        setIsHintButtonBlinking(false);
+      }, remainingMs);
+    }
+  }, [eligibleLockedHintKey, hintDisplay.enabled, paused]);
+
+  // Keep game paused and audio ducked while the Get Hint modal or Rewarded Ad is active
+  useEffect(() => {
+    onHintAdStateChange?.(hintModalOpen || hintAdLoading);
+  }, [hintModalOpen, hintAdLoading, onHintAdStateChange]);
 
   const showHintNotice = (msg: string) => {
     setHintAdNotice(msg);
@@ -148,28 +789,89 @@ export function GameCanvas({
     hintNoticeTimerRef.current = window.setTimeout(() => {
       setHintAdNotice(null);
       hintNoticeTimerRef.current = null;
-    }, 3200);
+    }, 3600);
   };
 
-  const handleWatchHintAd = async (obstacleKey: string) => {
-    if (hintAdLoading || unlockedHintKeys.includes(obstacleKey)) return;
+  const handleOpenHintModal = () => {
+    if (!hintDisplay.enabled || hintAdLoading) return;
+    if (!hintDisplay.takenHint && !effectiveHint) return;
+    stopHintButtonBlink();
     audioManager.unlockAudio();
     audioManager.playButtonClick();
     engineRef.current?.clearInputs();
     touchActiveRef.current = { left: false, right: false, jump: false };
     setTouchState({ left: false, right: false, jump: false });
 
+    // If the player has already watched the reward ad and taken the hint for this level,
+    // allow viewing their exact taken hint immediately without another ad.
+    if (hintDisplay.canShowLevelHint && hintDisplay.takenHint) {
+      setIsReviewingSavedHint(true);
+      setActiveHintModalTarget({
+        levelId: hud.levelId,
+        obstacleKey: hintDisplay.takenHint.obstacleKey,
+        sarcasticHint: hintDisplay.takenHint.sarcasticHint,
+        clueText: hintDisplay.takenHint.clueText,
+        adaptiveText: hintDisplay.takenHint.adaptiveText,
+        deathsOnObstacle: effectiveHint?.deathsOnObstacle ?? hud.levelDeaths,
+      });
+      setHintAdNotice(null);
+      setHintModalOpen(true);
+      return;
+    }
+
+    if (!effectiveHint) return;
+    setIsReviewingSavedHint(false);
+    const selectedSarcasticHint =
+      selectSarcasticLevelHint(hud.levelId, {
+        lastHint: lastSarcasticTextRef.current,
+        obstacleIndex: effectiveHint.obstacleIndex,
+      }) ?? effectiveHint.clueText;
+    lastSarcasticTextRef.current = selectedSarcasticHint;
+
+    const adaptiveText = hud.adaptiveHint ?? currentLevelDef.adaptiveClue?.text ?? null;
+    setActiveHintModalTarget({
+      levelId: hud.levelId,
+      obstacleKey: effectiveHint.obstacleKey,
+      sarcasticHint: selectedSarcasticHint,
+      clueText: effectiveHint.clueText,
+      adaptiveText,
+      deathsOnObstacle: effectiveHint.deathsOnObstacle,
+    });
+    setHintAdNotice(null);
+    setHintModalOpen(true);
+  };
+
+  const handleCloseHintModal = () => {
+    if (hintAdLoading) return;
+    audioManager.playButtonClick();
+    setHintModalOpen(false);
+    setHintAdNotice(null);
+  };
+
+  const handleWatchHintAd = async () => {
+    if (!hintDisplay.enabled || !activeHintModalTarget || hintAdLoading) return;
+    const targetLevelId = activeHintModalTarget.levelId;
+    if (targetLevelId > STRICT_HINT_MAX_LEVEL || localUsedHintsByLevel[targetLevelId]) return;
+
+    audioManager.unlockAudio();
+    audioManager.playButtonClick();
     setHintAdLoading(true);
     setHintAdNotice(null);
-    onHintAdStateChange?.(true);
 
     try {
       const result = await adMobService.showRewardedHintAd();
       if (result.rewarded) {
-        setUnlockedHintKeys((prev) =>
-          prev.includes(obstacleKey) ? prev : [...prev, obstacleKey],
-        );
-        setDismissedHintKeys((prev) => prev.filter((k) => k !== obstacleKey));
+        const unlockedHint: UsedLevelHint = {
+          obstacleKey: activeHintModalTarget.obstacleKey,
+          sarcasticHint: activeHintModalTarget.sarcasticHint,
+          clueText: activeHintModalTarget.clueText,
+          adaptiveText: activeHintModalTarget.adaptiveText,
+        };
+        setLocalUsedHintsByLevel((prev) => ({
+          ...prev,
+          [targetLevelId]: unlockedHint,
+        }));
+        onHintUnlocked?.(targetLevelId, unlockedHint);
       } else if (result.reason === 'dismissed_early') {
         showHintNotice('Ad skipped early — no hint for quitters.');
       } else if (result.reason === 'offline') {
@@ -181,7 +883,6 @@ export function GameCanvas({
       showHintNotice('Ad failed to load — no hint granted.');
     } finally {
       setHintAdLoading(false);
-      onHintAdStateChange?.(false);
     }
   };
 
@@ -190,7 +891,6 @@ export function GameCanvas({
     text: string;
     streakMilestone: DeathStreakMilestone | null;
   } | null>(null);
-  const lastTauntRef = useRef<string | null>(null);
   const tauntTimerRef = useRef<number | null>(null);
 
   // Screen shake & impact flash refs/state (never unmounts canvas)
@@ -260,25 +960,19 @@ export function GameCanvas({
       onDeathRecorded: (lid, ld, streak) => {
         triggerScreenShake('death');
         setDeathPulseId((id) => id + 1);
-        const milestone = getDeathStreakMilestone(streak);
-        const nextTaunt = milestone
-          ? pickDeathStreakStickmanComment(milestone, lid).taunt
-          : getRandomDeathTaunt(lastTauntRef.current, lid);
-        lastTauntRef.current = nextTaunt;
+        const hudTaunt = commentaryService.getHudDeathTaunt(lid, streak);
         setActiveTaunt((prev) => ({
           id: (prev?.id ?? 0) + 1,
-          text: nextTaunt,
-          streakMilestone: milestone,
+          text: hudTaunt.text,
+          streakMilestone: hudTaunt.streakMilestone,
         }));
         if (tauntTimerRef.current !== null) {
           window.clearTimeout(tauntTimerRef.current);
         }
-        const tauntDuration =
-          milestone === 20 ? 5200 : milestone === 10 ? 4600 : milestone === 5 ? 4200 : 3200;
         tauntTimerRef.current = window.setTimeout(() => {
           setActiveTaunt(null);
           tauntTimerRef.current = null;
-        }, tauntDuration);
+        }, hudTaunt.durationMs);
         callbacksRef.current.onDeathRecorded(lid, ld);
       },
       onDeathScreenOpen: (snapshot) => {
@@ -290,6 +984,7 @@ export function GameCanvas({
         }
         callbacksRef.current.onTrickTriggered(k);
       },
+      onRenderDarknessMask: renderHighIntensityDarknessMask,
       onLevelComplete: (stats) => callbacksRef.current.onLevelComplete(stats),
     });
 
@@ -313,6 +1008,10 @@ export function GameCanvas({
         window.clearTimeout(hintNoticeTimerRef.current);
         hintNoticeTimerRef.current = null;
       }
+      if (hintBlinkTimerRef.current !== null) {
+        window.clearTimeout(hintBlinkTimerRef.current);
+        hintBlinkTimerRef.current = null;
+      }
       onHintAdStateChange?.(false);
       engine.destroy();
       engineRef.current = null;
@@ -327,6 +1026,11 @@ export function GameCanvas({
     if (prevLevelRef.current !== levelId) {
       prevLevelRef.current = levelId;
       clearActiveTaunt();
+      stopHintButtonBlink();
+      blinkedHintKeysRef.current.clear();
+      lastSarcasticTextRef.current = null;
+      setHintModalOpen(false);
+      setActiveHintModalTarget(null);
       setHintAdNotice(null);
       engineRef.current?.loadLevel(levelId);
     }
@@ -338,6 +1042,9 @@ export function GameCanvas({
     if (prevRestartRef.current !== restartToken) {
       prevRestartRef.current = restartToken;
       clearActiveTaunt();
+      stopHintButtonBlink();
+      blinkedHintKeysRef.current.clear();
+      setHintModalOpen(false);
       engineRef.current?.restartLevel();
     }
   }, [restartToken]);
@@ -375,6 +1082,14 @@ export function GameCanvas({
     const onKeyDown = (e: KeyboardEvent) => {
       const engine = engineRef.current;
       if (!engine || hintAdLoading) return;
+
+      if (hintModalOpen) {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          handleCloseHintModal();
+        }
+        return;
+      }
 
       if (e.key === 'Escape' || e.key === 'p' || e.key === 'P') {
         e.preventDefault();
@@ -441,7 +1156,7 @@ export function GameCanvas({
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('blur', onBlur);
     };
-  }, [paused, hintAdLoading, onPauseToggle, onToggleMute]);
+  }, [paused, hintModalOpen, hintAdLoading, onPauseToggle, onToggleMute]);
 
   const showTouchControls =
     settings.touchControls === 'always' || (settings.touchControls === 'auto' && isTouchDevice);
@@ -480,9 +1195,15 @@ export function GameCanvas({
   };
 
   const levelNumPadded = String(hud.levelId).padStart(2, '0');
+  const isDarkLevel = isHighIntensityDarknessLevel(hud.levelId);
+  const difficultyStage = getDifficultyStage(hud.levelId);
 
   return (
-    <div className="relative w-full h-full overflow-hidden bg-[#F5F3EE] select-none">
+    <div
+      className={`relative w-full h-full overflow-hidden select-none ${
+        isDarkLevel ? 'bg-[#020204]' : 'bg-[#F5F3EE]'
+      }`}
+    >
       {/* Shakeable Viewport Stage (canvas + HUD jolt together on hazard impact/death) */}
       <div ref={shakeStageRef} className="relative w-full h-full">
         {/* Isolated 60fps Canvas Viewport */}
@@ -492,27 +1213,55 @@ export function GameCanvas({
         <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-start justify-between gap-3 safe-px sm:px-6 pt-2 sm:pt-3.5">
         {/* Top-left prominent Level Number & quiet tabular telemetry */}
         <div className="flex items-start gap-3">
-          <div className="flex flex-col leading-none pr-3 border-r border-[#111111]/20">
-            <span className="text-[10px] font-mono-tabular font-semibold text-[#57534E]">
+          <div
+            className={`flex flex-col leading-none pr-3 border-r ${
+              isDarkLevel ? 'border-[#F5F3EE]/25' : 'border-[#111111]/20'
+            }`}
+          >
+            <span
+              className={`text-[10px] font-mono-tabular font-semibold ${
+                isDarkLevel ? 'text-[#A8A29E]' : 'text-[#57534E]'
+              }`}
+            >
               LEVEL
             </span>
-            <div className="font-display font-extrabold text-2xl sm:text-3xl tracking-tight text-[#111111] font-mono-tabular mt-0.5">
+            <div
+              className={`font-display font-extrabold text-2xl sm:text-3xl tracking-tight font-mono-tabular mt-0.5 ${
+                isDarkLevel ? 'text-[#F5F3EE]' : 'text-[#111111]'
+              }`}
+            >
               {levelNumPadded}
-              <span className="text-xs sm:text-sm font-medium text-[#78716C]">
+              <span
+                className={`text-xs sm:text-sm font-medium ${
+                  isDarkLevel ? 'text-[#A8A29E]' : 'text-[#78716C]'
+                }`}
+              >
                 /{LEVELS.length}
               </span>
             </div>
           </div>
 
           <div className="flex flex-col pt-0.5">
-            <div className="text-xs sm:text-sm font-display font-bold text-[#111111] tracking-tight">
+            <div
+              className={`text-xs sm:text-sm font-display font-bold tracking-tight ${
+                isDarkLevel ? 'text-[#F5F3EE]' : 'text-[#111111]'
+              }`}
+            >
               {hud.levelName}
-              <span className="hidden sm:inline font-sans font-normal text-[#57534E]">
+              <span
+                className={`hidden sm:inline font-sans font-normal ${
+                  isDarkLevel ? 'text-[#A8A29E]' : 'text-[#57534E]'
+                }`}
+              >
                 {' '}
-                · Ch.{hud.chapter} {hud.chapterTitle}
+                · {difficultyStage.name}
               </span>
             </div>
-            <div className="flex items-center gap-2 text-[11px] sm:text-xs font-mono-tabular text-[#44403C] mt-0.5">
+            <div
+              className={`flex items-center gap-2 text-[11px] sm:text-xs font-mono-tabular mt-0.5 ${
+                isDarkLevel ? 'text-[#D6D1C7]' : 'text-[#44403C]'
+              }`}
+            >
               <span>{formatTimeMs(hud.elapsedMs)}</span>
               <span aria-hidden="true">·</span>
               <span className={hud.levelDeaths > 0 ? 'text-[#DC2626] font-semibold' : ''}>
@@ -521,15 +1270,16 @@ export function GameCanvas({
               {hud.checkpointReached && (
                 <>
                   <span aria-hidden="true">·</span>
-                  <span className="text-[#111111] font-semibold">Saved</span>
+                  <span
+                    className={`font-semibold ${
+                      isDarkLevel ? 'text-[#F5F3EE]' : 'text-[#111111]'
+                    }`}
+                  >
+                    Saved
+                  </span>
                 </>
               )}
             </div>
-            {hud.adaptiveHint && (
-              <div className="text-[10px] sm:text-[11px] font-mono-tabular text-[#DC2626] mt-0.5">
-                {hud.adaptiveHint}
-              </div>
-            )}
           </div>
         </div>
 
@@ -588,6 +1338,43 @@ export function GameCanvas({
           >
             <RotateCcw className="w-4 h-4" />
           </button>
+
+          {hintDisplay.showHeaderButton && (
+            <button
+              type="button"
+              disabled={hintAdLoading}
+              onClick={handleOpenHintModal}
+              aria-label={
+                hintDisplay.canShowLevelHint
+                  ? 'View the hint you already unlocked for this level'
+                  : 'Get Hint (watch rewarded ad to unlock)'
+              }
+              title={hintDisplay.canShowLevelHint ? 'View Hint' : 'Get Hint (Ad)'}
+              className={`h-10 relative inline-flex items-center gap-1.5 px-2.5 sm:px-3 rounded-lg border text-xs font-semibold transition-all whitespace-nowrap shrink-0 active:scale-95 ${
+                hintAdLoading
+                  ? 'border-[#111111]/20 bg-[#EAE6DC] text-[#78716C] opacity-65 cursor-wait'
+                  : hintDisplay.shouldBlink
+                    ? 'border-[#DC2626]/70 bg-[#F5F3EE] text-[#111111] hover:border-[#DC2626] hover:text-[#DC2626] cursor-pointer animate-hint-available'
+                    : hasRepeatObstacleFail && !hintDisplay.canShowLevelHint
+                      ? 'border-[#DC2626]/55 bg-[#F5F3EE] text-[#111111] hover:border-[#DC2626] hover:text-[#DC2626] cursor-pointer'
+                      : 'border-[#111111]/30 bg-[#F5F3EE] text-[#111111] hover:border-[#DC2626] hover:text-[#DC2626] cursor-pointer'
+              }`}
+            >
+              <span className="relative inline-flex items-center justify-center shrink-0">
+                <Lightbulb className="w-4 h-4 text-[#DC2626]" />
+                {hintDisplay.shouldBlink && (
+                  <span
+                    aria-hidden="true"
+                    className="absolute -top-0.5 -right-0.5 flex h-1.5 w-1.5"
+                  >
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#DC2626] opacity-75" />
+                    <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-[#DC2626]" />
+                  </span>
+                )}
+              </span>
+              <span className="hidden sm:inline">Hint</span>
+            </button>
+          )}
 
           <button
             type="button"
@@ -701,113 +1488,80 @@ export function GameCanvas({
           )}
         </div>
 
-        {/* Subtle, Non-Intrusive 'Ask for Hint' HUD Prompt (Levels 1–30 only, after dying; Rewarded Ad required) */}
-        {!paused &&
-          hud.levelId >= 1 &&
-          hud.levelId <= HINT_SYSTEM_MAX_LEVEL &&
-          (hud.levelDeaths > 0 || hud.levelDeathStreak > 0) &&
+        {/* Floating 'Ask for Hint' / 'View Hint' HUD Button driven by `hintDisplay` (strictly Levels 1–50; blinks for 10s when locked, never auto-shows hint text) */}
+        {hintDisplay.showFloatingButton &&
           hud.obstacleHint && (() => {
             const activeHint = hud.obstacleHint;
-            const isUnlocked = unlockedHintKeys.includes(activeHint.obstacleKey);
-            const isDismissed = dismissedHintKeys.includes(activeHint.obstacleKey);
 
             return (
-              <div className="pointer-events-none absolute inset-x-0 bottom-2.5 sm:bottom-4 z-[21] flex flex-col items-center gap-1 px-3">
-                {hintAdNotice && (
-                  <div className="px-2.5 py-0.5 rounded bg-[#111111]/90 text-[#F5F3EE] text-[10px] font-mono-tabular">
-                    {hintAdNotice}
-                  </div>
-                )}
-
-                {!isUnlocked ? (
+              <div className="pointer-events-none absolute inset-x-0 bottom-3 sm:bottom-4 z-[21] flex flex-col items-center gap-1.5 px-3">
+                {!hintDisplay.canShowLevelHint ? (
                   <button
                     key={`hint-btn-${activeHint.obstacleKey}-${hintNotifyBurstId}`}
                     type="button"
                     disabled={hintAdLoading}
-                    onClick={() => void handleWatchHintAd(activeHint.obstacleKey)}
-                    aria-label="Ask for Hint — watch a rewarded ad to unlock a cryptic clue for this level"
-                    className={`pointer-events-auto relative inline-flex items-center gap-1.5 sm:gap-2 px-3 py-1.5 rounded-lg border border-dashed border-[#111111]/35 bg-[#F5F3EE]/94 text-[#292524] hover:border-[#111111] hover:bg-[#FFFFFF] active:scale-[0.98] transition-colors cursor-pointer shadow-[2px_2px_0px_rgba(17,17,17,0.12)] ${
+                    onClick={handleOpenHintModal}
+                    aria-label="Ask for Hint — open Get Hint modal and watch a rewarded ad to unlock the hint"
+                    className={`pointer-events-auto relative inline-flex items-center gap-1.5 sm:gap-2 px-3.5 py-2 rounded-xl border-2 bg-[#F5F3EE]/96 text-[#111111] hover:border-[#DC2626] hover:bg-[#FFFFFF] active:scale-[0.98] transition-colors cursor-pointer shadow-[0_4px_14px_rgba(17,17,17,0.16),2px_2px_0px_rgba(220,38,38,0.28)] ${
                       showTouchControls ? 'max-w-[min(320px,46vw)]' : 'max-w-md'
                     } ${
                       hintAdLoading
-                        ? 'opacity-65 cursor-wait'
-                        : 'animate-hint-available'
+                        ? 'border-[#DC2626]/55 opacity-65 cursor-wait'
+                        : hintDisplay.shouldBlink
+                          ? 'border-[#DC2626]/80 animate-hint-available'
+                          : 'border-[#DC2626]/60'
                     }`}
                   >
-                    {!hintAdLoading && (
+                    {hintDisplay.shouldBlink && (
                       <span
                         aria-hidden="true"
-                        className="pointer-events-none absolute inset-0 rounded-lg border border-[#DC2626]/55 animate-hint-sonar"
+                        className="pointer-events-none absolute inset-0 rounded-xl border-2 border-[#DC2626]/60 animate-hint-sonar"
                       />
                     )}
                     <span className="relative inline-flex items-center justify-center shrink-0">
                       <Lightbulb className="w-3.5 h-3.5 text-[#DC2626]" />
-                      {!hintAdLoading && (
+                      {hintDisplay.shouldBlink && (
                         <span
                           aria-hidden="true"
                           className="absolute -top-0.5 -right-0.5 flex h-1.5 w-1.5"
                         >
-                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#DC2626] opacity-75" />
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#DC2626] opacity-80" />
                           <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-[#DC2626]" />
                         </span>
                       )}
                     </span>
-                    <span className="text-[10px] sm:text-[11px] font-mono-tabular font-bold text-[#111111] whitespace-nowrap">
-                      {hintAdLoading ? 'Loading Ad...' : 'Ask for Hint'}
+                    <span className="text-[10px] sm:text-[11px] font-mono-tabular font-extrabold text-[#111111] whitespace-nowrap">
+                      Ask for Hint
                     </span>
                     <span aria-hidden="true" className="text-[#A8A29E]">
                       ·
                     </span>
-                    <span className="inline-flex items-center gap-1 text-[10px] sm:text-[11px] font-mono-tabular text-[#57534E] whitespace-nowrap">
+                    <span className="inline-flex items-center gap-1 text-[10px] sm:text-[11px] font-mono-tabular font-semibold text-[#DC2626] whitespace-nowrap">
                       <Play className="w-2.5 h-2.5 fill-[#DC2626] text-[#DC2626]" />
-                      <span>
-                        {activeHint.deathsOnObstacle >= 3
-                          ? `Watch Ad (${activeHint.deathsOnObstacle}×)`
-                          : 'Watch Ad'}
-                      </span>
+                      <span>Watch Ad ({activeHint.deathsOnObstacle}×)</span>
                     </span>
                   </button>
-                ) : isDismissed ? (
+                ) : (
                   <button
                     type="button"
-                    onClick={() =>
-                      setDismissedHintKeys((prev) =>
-                        prev.filter((k) => k !== activeHint.obstacleKey),
-                      )
-                    }
-                    className="pointer-events-auto inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-dashed border-[#111111]/30 bg-[#F5F3EE]/88 text-[#57534E] hover:text-[#111111] hover:border-[#111111]/60 text-[10px] font-mono-tabular font-semibold transition-colors cursor-pointer"
-                  >
-                    <Lightbulb className="w-3 h-3 text-[#DC2626]" />
-                    <span>Show Hint</span>
-                  </button>
-                ) : (
-                  <div
-                    role="status"
-                    className={`pointer-events-auto flex items-start gap-2 px-3 py-1.5 rounded-lg border border-dashed border-[#111111]/40 bg-[#F5F3EE]/94 text-[#292524] shadow-[2px_2px_0px_rgba(17,17,17,0.1)] ${
-                      showTouchControls ? 'max-w-[min(340px,46vw)]' : 'max-w-lg'
+                    disabled={hintAdLoading}
+                    onClick={handleOpenHintModal}
+                    aria-label="Hint — view the hint you already unlocked for this level"
+                    className={`pointer-events-auto inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl border-2 border-[#111111]/35 bg-[#F5F3EE]/96 text-[#111111] hover:border-[#DC2626] hover:text-[#DC2626] active:scale-[0.98] transition-colors cursor-pointer shadow-[0_3px_10px_rgba(17,17,17,0.12),2px_2px_0px_rgba(17,17,17,0.16)] ${
+                      showTouchControls ? 'max-w-[min(320px,46vw)]' : 'max-w-md'
                     }`}
                   >
-                    <Lightbulb className="w-3.5 h-3.5 text-[#DC2626] shrink-0 mt-0.5" />
-                    <p className="text-[10.5px] sm:text-xs font-mono-tabular leading-snug text-[#292524]">
-                      <span className="font-bold text-[#DC2626] mr-1.5">HINT ·</span>
-                      <span className="italic">&ldquo;{activeHint.clueText}&rdquo;</span>
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setDismissedHintKeys((prev) =>
-                          prev.includes(activeHint.obstacleKey)
-                            ? prev
-                            : [...prev, activeHint.obstacleKey],
-                        )
-                      }
-                      aria-label="Dismiss hint"
-                      title="Hide hint"
-                      className="p-0.5 rounded text-[#78716C] hover:text-[#111111] transition-colors shrink-0 cursor-pointer"
-                    >
-                      <X className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
+                    <Lightbulb className="w-3.5 h-3.5 text-[#DC2626] shrink-0" />
+                    <span className="text-[10px] sm:text-[11px] font-mono-tabular font-extrabold whitespace-nowrap">
+                      Hint
+                    </span>
+                    <span aria-hidden="true" className="text-[#A8A29E]">
+                      ·
+                    </span>
+                    <span className="text-[10px] sm:text-[11px] font-mono-tabular font-semibold text-[#57534E] whitespace-nowrap">
+                      Unlocked
+                    </span>
+                  </button>
                 )}
               </div>
             );
@@ -902,6 +1656,29 @@ export function GameCanvas({
           </div>
         )}
       </div>
+
+      {/* 'Get Hint' Modal Component driven by `hintDisplay` (Strictly Levels 1–50: Rewarded Ad unlocks hint, and already-taken hints can be re-viewed anytime on that level) */}
+      {hintDisplay.enabled && activeHintModalTarget && (
+        <GetHintModal
+          isOpen={hintModalOpen}
+          levelId={hud.levelId}
+          levelNumPadded={levelNumPadded}
+          levelName={hud.levelName}
+          sarcasticHint={activeHintModalTarget.sarcasticHint}
+          clueText={activeHintModalTarget.clueText}
+          adaptiveNote={hud.adaptiveHint ?? activeHintModalTarget.adaptiveText}
+          deathsOnObstacle={activeHintModalTarget.deathsOnObstacle}
+          isUnlocked={
+            hintDisplay.canShowLevelHint ||
+            Boolean(localUsedHintsByLevel[activeHintModalTarget.levelId])
+          }
+          isReviewingSavedHint={isReviewingSavedHint}
+          isAdLoading={hintAdLoading}
+          adNotice={hintAdNotice}
+          onWatchAd={() => void handleWatchHintAd()}
+          onClose={handleCloseHintModal}
+        />
+      )}
 
       {/* Crimson Edge Impact Flash on Hazard Hit / Death */}
       {impactFlashId > 0 && (

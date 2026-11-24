@@ -76,6 +76,7 @@ export function getLevelProgress(save: SaveData, levelId: number): LevelProgress
       deaths: 0,
       zeroJumpCompleted: false,
       zeroDeathCompleted: false,
+      usedHint: null,
     }
   );
 }
@@ -116,6 +117,10 @@ export function evaluateAchievements(save: SaveData): AchievementDef[] {
       unlock('survivor');
       break;
     }
+  }
+
+  if (save.levels[99]?.completed) {
+    unlock('ultimate_test');
   }
 
   if (save.levels[100]?.completed) {

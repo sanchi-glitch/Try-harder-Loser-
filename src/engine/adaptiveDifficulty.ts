@@ -1,4 +1,5 @@
 import type { AdaptiveSnapshot, DeathCause, DeathCluster } from '../types/game';
+import { HINT_SYSTEM_MAX_LEVEL } from '../data/hintClues';
 
 interface DeathRecord {
   x: number;
@@ -349,7 +350,7 @@ export class AdaptiveDifficultySystem {
     } else if (repeatFailZone) {
       playstyleLabel = 'Determined Optimist';
       activeModifierText =
-        levelId <= 30
+        levelId <= HINT_SYSTEM_MAX_LEVEL
           ? null
           : 'Adaptive: Environmental clue revealed.';
     }

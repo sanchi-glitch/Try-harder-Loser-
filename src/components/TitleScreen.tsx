@@ -14,11 +14,12 @@ import {
   VolumeX,
   X,
 } from 'lucide-react';
-import { STICKMAN_HOME_INSULTS } from '../data/deathMessages';
+import { getCrueltyTier, getHomeStickmanInsults } from '../data/deathMessages';
 import { CHAPTERS, getLevelById, LEVELS } from '../data/levels';
 import { audioManager } from '../engine/audio';
 import type { SaveData } from '../types/game';
 import { HomeBannerAdSlot } from './AdMobOverlays';
+import { PWAInstallButton } from './PWAInstallButton';
 
 interface TitleScreenProps {
   save: SaveData;
@@ -279,10 +280,14 @@ export function TitleScreen({
       }
       ctx.restore();
 
-      // Rotating stickman insult speech bubble right on the Home Screen!
-      if (staring) {
-        const insultIdx = Math.floor(t / 4.2) % STICKMAN_HOME_INSULTS.length;
-        const text = STICKMAN_HOME_INSULTS[insultIdx];
+      // Continuous autonomous stickman insult speech bubble right on the Home Screen (no tap needed, scales crueler with level!)
+      const activeProgressLevel = Math.max(save.currentLevelId, save.highestUnlockedLevelId);
+      const homeInsults = getHomeStickmanInsults(activeProgressLevel);
+      const isCruelDarkHome = getCrueltyTier(activeProgressLevel) >= 4;
+      const showHomeBubble = (t % 4.6) < 3.85;
+      if (showHomeBubble) {
+        const insultIdx = Math.floor(t / 4.6) % homeInsults.length;
+        const text = homeInsults[insultIdx];
         ctx.save();
         ctx.font = '700 11.5px "DM Sans", sans-serif';
         const bw = Math.max(96, ctx.measureText(text).width + 24);
@@ -291,12 +296,12 @@ export function TitleScreen({
         const bx = clampedX - bw / 2;
         const by = sy - 86;
 
-        ctx.fillStyle = 'rgba(220, 38, 38, 0.2)';
+        ctx.fillStyle = isCruelDarkHome ? 'rgba(220, 38, 38, 0.34)' : 'rgba(220, 38, 38, 0.2)';
         ctx.beginPath();
         ctx.roundRect(bx + 3, by + 3, bw, bh, 7);
         ctx.fill();
 
-        ctx.fillStyle = '#FFFFFF';
+        ctx.fillStyle = isCruelDarkHome ? '#111111' : '#FFFFFF';
         ctx.strokeStyle = '#DC2626';
         ctx.lineWidth = 2;
         ctx.beginPath();
@@ -313,7 +318,7 @@ export function TitleScreen({
         ctx.fill();
         ctx.stroke();
 
-        ctx.fillStyle = '#111111';
+        ctx.fillStyle = isCruelDarkHome ? '#F5F3EE' : '#111111';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText(text, clampedX, by + bh / 2 + 0.5);
@@ -352,7 +357,7 @@ export function TitleScreen({
 
     rafId = window.requestAnimationFrame(draw);
     return () => window.cancelAnimationFrame(rafId);
-  }, []);
+  }, [save.currentLevelId, save.highestUnlockedLevelId]);
 
   const completedCount = Object.values(save.levels).filter((l) => l.completed).length;
 
@@ -632,13 +637,20 @@ export function TitleScreen({
         >
           <div className="w-full max-w-2xl max-h-[92%] overflow-y-auto touch-pan-y rounded-xl bg-[#F5F3EE] border-2 border-[#111111] shadow-[6px_6px_0px_#111111] p-4 sm:p-5 text-[#111111]">
             <div className="flex items-center justify-between gap-4 pb-3 border-b border-[#111111]/12">
-              <div className="flex items-baseline gap-3">
-                <h2 className="font-display font-extrabold text-lg sm:text-2xl tracking-tight">
-                  Game Menu
-                </h2>
-                <p className="text-[11px] sm:text-xs text-[#57534E]">
-                  All modes, levels &amp; horizontal options
-                </p>
+              <div className="flex items-center gap-3">
+                <img
+                  src="/icons/icon-192x192.png"
+                  alt="Try harder, Loser! app icon"
+                  className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl border border-[#111111]/20 shadow-[2px_2px_0px_rgba(17,17,17,0.12)] shrink-0"
+                />
+                <div className="flex flex-col sm:flex-row sm:items-baseline sm:gap-3">
+                  <h2 className="font-display font-extrabold text-lg sm:text-2xl tracking-tight leading-none">
+                    Game Menu
+                  </h2>
+                  <p className="text-[11px] sm:text-xs text-[#57534E]">
+                    All modes, levels &amp; horizontal options
+                  </p>
+                </div>
               </div>
               <button
                 type="button"
@@ -705,6 +717,8 @@ export function TitleScreen({
                     <Maximize2 className="w-3.5 h-3.5" />
                     Fullscreen Landscape
                   </button>
+
+                  <PWAInstallButton onInstalledOrOpened={() => setMenuDrawerOpen(false)} />
                 </div>
               </div>
 

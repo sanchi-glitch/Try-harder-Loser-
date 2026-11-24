@@ -11,3 +11,11 @@ createRoot(document.getElementById('root')!).render(
     </FirebaseProvider>
   </ErrorBoundary>,
 );
+
+if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {
+      // Ignore registration failure in restricted preview sandboxes
+    });
+  });
+}

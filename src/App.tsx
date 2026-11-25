@@ -3,18 +3,14 @@ import { AdMobTestOverlay } from './components/AdMobOverlays';
 import { DeathScreenModal } from './components/DeathScreenModal';
 import { GameCanvas } from './components/GameCanvas';
 import { AchievementToast, LevelCompleteModal, PauseModal } from './components/GamePlayOverlays';
-import { LeaderboardModal } from './components/LeaderboardModal';
-import type { LeaderboardSyncStatus } from './components/LevelCompleteModal';
 import { LevelSelect } from './components/LevelSelect';
 import { SettingsModal } from './components/SettingsModal';
 import { AchievementsModal, StatsModal } from './components/StatsAndAchievementsModal';
 import { TitleScreen } from './components/TitleScreen';
-import { useFirebase } from './contexts/FirebaseContext';
 import { getDifficultyStage } from './data/difficultyStages';
 import { getLevelById, LEVELS } from './data/levels';
 import { adMobService, MAX_REWARDED_ADS_PER_DEATH } from './engine/adMobService';
 import { audioManager } from './engine/audio';
-import { submitLevelClearTime } from './engine/leaderboardService';
 import {
   evaluateAchievements,
   getLevelProgress,
@@ -34,17 +30,12 @@ import type {
 } from './types/game';
 
 export default function App() {
-  const { user, playerName } = useFirebase();
   const [save, setSave] = useState<SaveData>(() => loadSaveData());
   const saveRef = useRef<SaveData>(save);
   saveRef.current = save;
 
   const [screen, setScreen] = useState<GameScreen>('TITLE');
   const [activeModal, setActiveModal] = useState<ModalType>('NONE');
-  const [leaderboardLevelId, setLeaderboardLevelId] = useState<number>(100);
-  const [leaderboardReturnModal, setLeaderboardReturnModal] = useState<ModalType>('NONE');
-  const [leaderboardSyncStatus, setLeaderboardSyncStatus] =
-    useState<LeaderboardSyncStatus>('idle');
   const [activeLevelId, setActiveLevelId] = useState<number>(() => save.currentLevelId || 1);
   const [restartToken, setRestartToken] = useState(0);
   const [levelCompletePayload, setLevelCompletePayload] = useState<LevelCompletePayload | null>(null);
@@ -63,15 +54,6 @@ export default function App() {
   }>({ id: 0, type: 'restart_after_death' });
   const [hintAdActive, setHintAdActive] = useState(false);
   const levelTransitionAdBusyRef = useRef(false);
-
-  const openLeaderboards = useCallback(
-    (levelId = 100, returnModal: ModalType = 'NONE') => {
-      setLeaderboardLevelId(levelId);
-      setLeaderboardReturnModal(returnModal);
-      setActiveModal('LEADERBOARDS');
-    },
-    [],
-  );
 
   // Smooth fade-out / fade-in level transition state
   const [levelTransition, setLevelTransition] = useState<{
@@ -327,7 +309,7 @@ export default function App() {
         setExtraLives((prev) => prev + 1);
         setAdsWatchedThisDeath((prev) => Math.min(MAX_REWARDED_ADS_PER_DEATH, prev + 1));
         setRewardedAdStatus(
-          '+1 Extra Life earned! Respawn at your exact death spot or watch another ad.',
+          '+1 Extra Life earned! Respawn on safe ground just before the obstacle or watch another ad.',
         );
       } else if (result.reason === 'dismissed_early') {
         setRewardedAdStatus('Ad skipped before completion — no extra life granted.');
@@ -427,30 +409,8 @@ export default function App() {
       setDeathSnapshot(null);
       setActiveModal('LEVEL_COMPLETE');
       void adMobService.preloadInterstitial();
-
-      if (!user) {
-        setLeaderboardSyncStatus('unauthenticated');
-      } else {
-        setLeaderboardSyncStatus('syncing');
-        void submitLevelClearTime({
-          levelId: stats.levelId,
-          elapsedMs: stats.elapsedMs,
-          deaths: stats.levelDeaths,
-          jumps: stats.jumpsUsed,
-          playerName,
-        })
-          .then((res) => {
-            if (res.status === 'submitted') setLeaderboardSyncStatus('submitted');
-            else if (res.status === 'existing_faster') setLeaderboardSyncStatus('existing_faster');
-            else if (res.status === 'unauthenticated') setLeaderboardSyncStatus('unauthenticated');
-            else setLeaderboardSyncStatus('idle');
-          })
-          .catch(() => {
-            setLeaderboardSyncStatus('error');
-          });
-      }
     },
-    [commitSave, playerName, user],
+    [commitSave],
   );
 
   const handlePauseToggle = useCallback(() => {
@@ -524,7 +484,6 @@ export default function App() {
           onOpenSettings={() => setActiveModal('SETTINGS')}
           onOpenStats={() => setActiveModal('STATS')}
           onOpenAchievements={() => setActiveModal('ACHIEVEMENTS')}
-          onOpenLeaderboards={() => openLeaderboards(100, 'NONE')}
           onToggleMute={handleToggleMute}
         />
       )}
@@ -534,7 +493,6 @@ export default function App() {
           save={save}
           modalOpen={activeModal !== 'NONE'}
           onSelectLevel={(lid) => startLevel(lid)}
-          onOpenLeaderboards={(lid) => openLeaderboards(lid, 'NONE')}
           onBack={() => setScreen('TITLE')}
         />
       )}
@@ -623,10 +581,6 @@ export default function App() {
           payload={levelCompletePayload}
           isFinalLevel={levelCompletePayload.levelId >= LEVELS.length}
           totalDeathsGlobal={save.totalDeaths}
-          leaderboardSyncStatus={leaderboardSyncStatus}
-          onOpenLeaderboards={() =>
-            openLeaderboards(levelCompletePayload.levelId, 'LEVEL_COMPLETE')
-          }
           onNextLevel={() => void handleNextLevelWithInterstitial(levelCompletePayload.levelId)}
           onReplay={() => startLevel(levelCompletePayload.levelId, true)}
           onOpenLevels={() => {
@@ -639,14 +593,6 @@ export default function App() {
             setLevelCompletePayload(null);
             setScreen('TITLE');
           }}
-        />
-      )}
-
-      {activeModal === 'LEADERBOARDS' && (
-        <LeaderboardModal
-          save={save}
-          initialLevelId={leaderboardLevelId}
-          onClose={() => setActiveModal(leaderboardReturnModal)}
         />
       )}
 

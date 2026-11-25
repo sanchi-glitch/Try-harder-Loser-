@@ -7,7 +7,6 @@ export type ModalType =
   | 'SETTINGS'
   | 'STATS'
   | 'ACHIEVEMENTS'
-  | 'LEADERBOARDS'
   | 'LEVEL_COMPLETE'
   | 'GAME_COMPLETE';
 

@@ -12,6 +12,7 @@ import {
   Play,
   RotateCcw,
   Skull,
+  Sun,
   Volume2,
   VolumeX,
   X,
@@ -29,7 +30,11 @@ import {
 import { adMobService } from '../engine/adMobService';
 import { audioManager } from '../engine/audio';
 import { commentaryService } from '../engine/commentaryService';
-import { PlatformerEngine, type DarknessRenderFrame } from '../engine/gameEngine';
+import {
+  PlatformerEngine,
+  type DangerVignetteRenderFrame,
+  type DarknessRenderFrame,
+} from '../engine/gameEngine';
 import { formatTimeMs } from '../engine/saveManager';
 import type {
   DeathLocationSnapshot,
@@ -173,16 +178,17 @@ export function isHighIntensityDarknessLevel(levelId: number): boolean {
 }
 
 /**
- * High-Intensity Darkness Renderer (single-pass radial gradient mask).
+ * Darkness Mask Renderer (single-pass elliptical forward-biased radial gradient).
  *
  * Preserves 60fps performance by using a radial gradient fill directly on the main
  * 2D canvas context (zero offscreen canvases, zero per-pixel loops):
  * - Activates strictly on designated darkness levels.
- * - Tight player-centered visibility radius (nudged slightly forward in facing direction)
- *   that tightens progressively on deeper blackout levels (52+).
- * - Near-zero ambient light outside the visibility cone (0.996–0.999 pitch-black void).
- * - Subtle unstable torch breathing + controlled micro-flicker without brightening the outer void.
- * - Faint crimson proximity rim warning only when an unexpected hazard enters close range.
+ * - Biases light forward in the player's facing direction so the obstacle directly in
+ *   front of the player is readable and understandable (more forgiving in early levels <= 35,
+ *   tightening progressively on deep blackout levels 52+).
+ * - When `lightBoostActive` is enabled (unlocked via Rewarded Ad), projects a wider
+ *   forward light beam across obstacles ahead while keeping surrounding darkness intact.
+ * - Faint crimson proximity rim warning when an unexpected hazard enters close range.
  */
 export function renderHighIntensityDarknessMask(
   ctx: CanvasRenderingContext2D,
@@ -200,57 +206,115 @@ export function renderHighIntensityDarknessMask(
     flashAlpha,
     nearestHazardDistance,
     proximityRevealRadius,
+    lightBoostActive,
   } = frame;
 
   if (!isHighIntensityDarknessLevel(levelId) || baseRadius <= 0) {
     return;
   }
 
-  // Deep blackout levels (52+) tighten the visibility cone and push outer darkness to pure pitch black
+  const isEarlyDark = levelId <= 35;
   const isDeepBlackout = levelId >= 52;
   const depthTighten = isDeepBlackout ? 0.94 : 1.0;
 
-  // Subtle organic flicker on the tight cone; outer ambient light remains virtually zero
-  const breathing = 1 + Math.sin(worldTime * 3.4) * 0.022 + Math.sin(worldTime * 9.7) * 0.01;
-  const microPulse = flashAlpha > 0.04 ? Math.min(0.12, flashAlpha * 0.4) : 0;
-  const effectiveRadius = Math.max(58, baseRadius * depthTighten * (breathing + microPulse));
-
-  // Nudge light center slightly ahead of facing so immediate footing stays readable yet claustrophobic
-  const cx = playerScreenX + facing * 10;
-  const cy = playerScreenY;
-
-  const innerClearRadius = Math.max(12, effectiveRadius * (isDeepBlackout ? 0.16 : 0.2));
-  const outerBlackoutRadius = Math.max(
-    innerClearRadius + 24,
-    effectiveRadius * (isDeepBlackout ? 1.02 : 1.08),
+  // Subtle organic torch breathing + controlled micro-flicker
+  const breathing = 1 + Math.sin(worldTime * 3.4) * 0.02 + Math.sin(worldTime * 9.7) * 0.008;
+  const microPulse = flashAlpha > 0.04 ? Math.min(0.11, flashAlpha * 0.36) : 0;
+  const boostMult = lightBoostActive ? 1.56 : 1.0;
+  const effectiveRadius = Math.max(
+    74,
+    baseRadius * depthTighten * boostMult * (breathing + microPulse),
   );
 
-  // Near-zero ambient light outside the player's visibility radius (0.997–0.999 pitch black)
-  const outerAlpha = Math.max(0.98, (isDeepBlackout ? 0.999 : 0.996) - microPulse * 0.12);
-  const nearEdgeAlpha = Math.max(0.94, (isDeepBlackout ? 0.982 : 0.968) - microPulse * 0.15);
-  const midFalloffAlpha = Math.max(0.76, (isDeepBlackout ? 0.87 : 0.82) - microPulse * 0.2);
+  // Shift light center forward in facing direction so upcoming obstacles in front of the player
+  // come clearly into view while darkness still wraps around the outer perimeter & behind.
+  const forwardOffset = lightBoostActive
+    ? isEarlyDark
+      ? 86
+      : 76
+    : isEarlyDark
+      ? 42
+      : 30;
+  const cx = playerScreenX + facing * forwardOffset;
+  const cy = playerScreenY - 2;
+
+  // Slightly stretch horizontally to illuminate obstacles ahead while preserving vertical/outer darkness
+  const beamScaleX = lightBoostActive ? 1.28 : isEarlyDark ? 1.18 : 1.12;
+  const beamScaleY = lightBoostActive ? 0.98 : isEarlyDark ? 1.02 : 0.98;
+
+  const innerClearRadius = Math.max(
+    22,
+    effectiveRadius * (lightBoostActive ? 0.46 : isEarlyDark ? 0.36 : 0.26),
+  );
+  const outerBlackoutRadius = Math.max(
+    innerClearRadius + 36,
+    effectiveRadius * (lightBoostActive ? 1.16 : isEarlyDark ? 1.14 : 1.08),
+  );
+
+  // Outer perimeter stays clearly dark even with the forward light boost active
+  const outerAlpha = lightBoostActive
+    ? Math.max(0.88, (isEarlyDark ? 0.9 : 0.945) - microPulse * 0.08)
+    : Math.max(0.93, (isDeepBlackout ? 0.992 : isEarlyDark ? 0.948 : 0.982) - microPulse * 0.1);
+  const nearEdgeAlpha = lightBoostActive
+    ? Math.max(0.74, (isEarlyDark ? 0.78 : 0.855) - microPulse * 0.1)
+    : Math.max(0.84, (isDeepBlackout ? 0.962 : isEarlyDark ? 0.875 : 0.94) - microPulse * 0.12);
+  const midFalloffAlpha = lightBoostActive
+    ? Math.max(0.28, (isEarlyDark ? 0.32 : 0.38) - microPulse * 0.12)
+    : Math.max(0.54, (isDeepBlackout ? 0.79 : isEarlyDark ? 0.62 : 0.74) - microPulse * 0.15);
 
   ctx.save();
 
-  // Primary high-intensity radial gradient mask
+  // Primary forward-biased elliptical radial darkness mask
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(beamScaleX, beamScaleY);
+
   const maskGrad = ctx.createRadialGradient(
-    cx,
-    cy,
+    0,
+    0,
     innerClearRadius,
-    cx,
-    cy,
+    0,
+    0,
     outerBlackoutRadius,
   );
   maskGrad.addColorStop(0, 'rgba(2, 2, 4, 0.00)');
-  maskGrad.addColorStop(0.28, 'rgba(2, 2, 4, 0.22)');
-  maskGrad.addColorStop(0.58, `rgba(2, 2, 4, ${midFalloffAlpha.toFixed(3)})`);
-  maskGrad.addColorStop(0.82, `rgba(1, 1, 3, ${nearEdgeAlpha.toFixed(3)})`);
+  maskGrad.addColorStop(0.32, lightBoostActive ? 'rgba(2, 2, 4, 0.06)' : 'rgba(2, 2, 4, 0.14)');
+  maskGrad.addColorStop(0.6, `rgba(2, 2, 4, ${midFalloffAlpha.toFixed(3)})`);
+  maskGrad.addColorStop(0.84, `rgba(1, 1, 3, ${nearEdgeAlpha.toFixed(3)})`);
   maskGrad.addColorStop(1, `rgba(1, 1, 3, ${outerAlpha.toFixed(3)})`);
 
   ctx.fillStyle = maskGrad;
-  ctx.fillRect(0, 0, viewWidth, viewHeight);
+  ctx.fillRect(
+    -cx / beamScaleX - 4,
+    -cy / beamScaleY - 4,
+    viewWidth / beamScaleX + 8,
+    viewHeight / beamScaleY + 8,
+  );
 
-  // Subtle close-proximity crimson danger rim when an unexpected obstacle emerges right beside the player
+  // Subtle warm lantern wash inside the forward beam when Rewarded Light Boost is active
+  if (lightBoostActive) {
+    const warmGrad = ctx.createRadialGradient(
+      0,
+      0,
+      innerClearRadius * 0.25,
+      0,
+      0,
+      outerBlackoutRadius * 0.88,
+    );
+    warmGrad.addColorStop(0, 'rgba(254, 243, 199, 0.065)');
+    warmGrad.addColorStop(0.65, 'rgba(251, 191, 36, 0.035)');
+    warmGrad.addColorStop(1, 'rgba(251, 191, 36, 0)');
+    ctx.fillStyle = warmGrad;
+    ctx.fillRect(
+      -cx / beamScaleX - 4,
+      -cy / beamScaleY - 4,
+      viewWidth / beamScaleX + 8,
+      viewHeight / beamScaleY + 8,
+    );
+  }
+  ctx.restore();
+
+  // Subtle close-proximity crimson danger rim when an unexpected obstacle enters right beside the player
   if (
     Number.isFinite(nearestHazardDistance) &&
     nearestHazardDistance < proximityRevealRadius
@@ -259,13 +323,13 @@ export function renderHighIntensityDarknessMask(
       0,
       Math.min(1, 1 - nearestHazardDistance / Math.max(1, proximityRevealRadius)),
     );
-    const glintAlpha = dangerIntensity * dangerIntensity * 0.24;
+    const glintAlpha = dangerIntensity * dangerIntensity * (lightBoostActive ? 0.15 : 0.22);
     if (glintAlpha > 0.015) {
       const dangerGrad = ctx.createRadialGradient(
-        cx,
+        playerScreenX + facing * 16,
         cy,
-        effectiveRadius * 0.5,
-        cx,
+        effectiveRadius * 0.45,
+        playerScreenX + facing * 16,
         cy,
         outerBlackoutRadius * 1.04,
       );
@@ -278,6 +342,95 @@ export function renderHighIntensityDarknessMask(
   }
 
   ctx.restore();
+}
+
+/**
+ * Dynamic Crimson Screen-Edge Vignette Renderer (60fps single-pass canvas overlay).
+ *
+ * Subtle psychological pressure cue rendered across the true full viewport edges:
+ * - Keeps the central ~66%+ playfield completely clear (alpha = 0) so obstacle readability is never hindered.
+ * - Gently deepens around the perimeter as the player approaches traps or high-difficulty obstacles.
+ * - Intensifies briefly via `pulseBoost` whenever a trap triggers or a lethal hazard passes close.
+ * - Respects `prefersReducedMotion` by disabling heartbeat oscillation.
+ */
+export function renderDangerVignette(
+  ctx: CanvasRenderingContext2D,
+  frame: DangerVignetteRenderFrame,
+): void {
+  const { width, height, intensity, pulseBoost, worldTime, isDarkLevel, prefersReducedMotion } =
+    frame;
+
+  const clampedIntensity = Math.max(0, Math.min(1, intensity));
+  const clampedPulse = Math.max(0, Math.min(1, pulseBoost));
+  if (width <= 0 || height <= 0 || (clampedIntensity <= 0.012 && clampedPulse <= 0.012)) {
+    return;
+  }
+
+  // Organic subtle heartbeat modulation when motion is allowed
+  const heartbeat = prefersReducedMotion
+    ? 1
+    : 0.93 + 0.07 * Math.sin(worldTime * 6.8) + 0.035 * Math.sin(worldTime * 13.6);
+
+  // Subtle base edge tint with brief crisp intensification during trap surges
+  const maxSteadyAlpha = isDarkLevel ? 0.3 : 0.23;
+  const maxPulseAlpha = isDarkLevel ? 0.13 : 0.11;
+  const outerAlpha = Math.min(
+    isDarkLevel ? 0.4 : 0.33,
+    (clampedIntensity * maxSteadyAlpha + clampedPulse * maxPulseAlpha) * heartbeat,
+  );
+  if (outerAlpha <= 0.008) return;
+
+  const midAlpha = outerAlpha * 0.42;
+  // Keep central playfield wide open; tighten slightly only on brief trap surges
+  const innerClearStop = Math.max(
+    0.5,
+    0.68 - clampedIntensity * 0.11 - clampedPulse * 0.06,
+  );
+
+  ctx.save();
+  ctx.translate(width * 0.5, height * 0.5);
+  ctx.scale(width * 0.5, height * 0.5);
+
+  const grad = ctx.createRadialGradient(0, 0, innerClearStop, 0, 0, 1.42);
+  grad.addColorStop(0, 'rgba(220, 38, 38, 0)');
+  grad.addColorStop(0.55, `rgba(220, 38, 38, ${midAlpha.toFixed(3)})`);
+  grad.addColorStop(1, `rgba(153, 27, 27, ${outerAlpha.toFixed(3)})`);
+
+  ctx.fillStyle = grad;
+  ctx.fillRect(-1.02, -1.02, 2.04, 2.04);
+  ctx.restore();
+
+  // Brief subtle crimson edge sheen when a trap activates or hazard passes right beside the player
+  if (clampedPulse > 0.08) {
+    const rimAlpha = Math.min(0.24, clampedPulse * (isDarkLevel ? 0.24 : 0.18));
+    const edgeThickness = Math.max(10, Math.min(width, height) * 0.045);
+
+    ctx.save();
+    const topGrad = ctx.createLinearGradient(0, 0, 0, edgeThickness);
+    topGrad.addColorStop(0, `rgba(220, 38, 38, ${rimAlpha.toFixed(3)})`);
+    topGrad.addColorStop(1, 'rgba(220, 38, 38, 0)');
+    ctx.fillStyle = topGrad;
+    ctx.fillRect(0, 0, width, edgeThickness);
+
+    const bottomGrad = ctx.createLinearGradient(0, height, 0, height - edgeThickness);
+    bottomGrad.addColorStop(0, `rgba(220, 38, 38, ${rimAlpha.toFixed(3)})`);
+    bottomGrad.addColorStop(1, 'rgba(220, 38, 38, 0)');
+    ctx.fillStyle = bottomGrad;
+    ctx.fillRect(0, height - edgeThickness, width, edgeThickness);
+
+    const leftGrad = ctx.createLinearGradient(0, 0, edgeThickness, 0);
+    leftGrad.addColorStop(0, `rgba(220, 38, 38, ${rimAlpha.toFixed(3)})`);
+    leftGrad.addColorStop(1, 'rgba(220, 38, 38, 0)');
+    ctx.fillStyle = leftGrad;
+    ctx.fillRect(0, 0, edgeThickness, height);
+
+    const rightGrad = ctx.createLinearGradient(width, 0, width - edgeThickness, 0);
+    rightGrad.addColorStop(0, `rgba(220, 38, 38, ${rimAlpha.toFixed(3)})`);
+    rightGrad.addColorStop(1, 'rgba(220, 38, 38, 0)');
+    ctx.fillStyle = rightGrad;
+    ctx.fillRect(width - edgeThickness, 0, edgeThickness, height);
+    ctx.restore();
+  }
 }
 
 export interface SelectSarcasticHintOptions {
@@ -559,6 +712,136 @@ export function GetHintModal({
   );
 }
 
+interface LightBoostModalProps {
+  isOpen: boolean;
+  levelNumPadded: string;
+  levelName: string;
+  isBoostActive: boolean;
+  isAdLoading: boolean;
+  adNotice: string | null;
+  onWatchAd: () => void;
+  onClose: () => void;
+}
+
+function LightBoostModal({
+  isOpen,
+  levelNumPadded,
+  levelName,
+  isBoostActive,
+  isAdLoading,
+  adNotice,
+  onWatchAd,
+  onClose,
+}: LightBoostModalProps) {
+  if (!isOpen) return null;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-[#020204]/78 p-3 sm:p-5"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="light-boost-modal-title"
+    >
+      <div className="w-full max-w-md max-h-[92%] overflow-y-auto touch-pan-y rounded-xl bg-[#F5F3EE] border-2 border-[#111111] shadow-[6px_6px_0px_#F59E0B] p-4 sm:p-5 text-[#111111]">
+        {/* Modal Header */}
+        <div className="flex items-start justify-between gap-3 pb-3 border-b border-[#111111]/12">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <span className="h-9 w-9 rounded-lg bg-[#111111] text-[#FBBF24] flex items-center justify-center shrink-0 shadow-[2px_2px_0px_#F59E0B]">
+              <Sun className="w-5 h-5" />
+            </span>
+            <div className="min-w-0">
+              <h2
+                id="light-boost-modal-title"
+                className="font-display font-extrabold text-base sm:text-lg leading-tight tracking-tight"
+              >
+                {isBoostActive ? 'Forward Light Active' : 'Illuminate Ahead'}
+              </h2>
+              <p className="text-[11px] font-mono-tabular text-[#57534E] truncate">
+                Level {levelNumPadded} · {levelName}
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            disabled={isAdLoading}
+            onClick={onClose}
+            aria-label="Close Illuminate Ahead modal"
+            className="h-8 w-8 flex items-center justify-center rounded-lg border border-[#111111]/20 bg-[#FFFFFF] text-[#111111] hover:border-[#111111] disabled:opacity-40 cursor-pointer shrink-0"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {!isBoostActive ? (
+          <div className="pt-3.5 space-y-3">
+            <div className="p-3 rounded-lg bg-[#111111] text-[#F5F3EE] border border-[#F59E0B]/40 space-y-1.5">
+              <div className="flex items-center gap-1.5 text-[10px] font-mono-tabular font-bold uppercase tracking-wider text-[#FBBF24]">
+                <Sun className="w-3.5 h-3.5" />
+                <span>Forward Beam · Surrounding Darkness Remains</span>
+              </div>
+              <p className="text-xs sm:text-sm text-[#F5F3EE] leading-snug">
+                Watch a short rewarded ad to reduce darkness in front of you so upcoming traps and
+                platforms come clearly into light, while keeping darkness around the edges.
+              </p>
+              <p className="text-[11px] text-[#D6D1C7]">
+                Stays active across retries until you finish Level {levelNumPadded}.
+              </p>
+            </div>
+
+            {adNotice && (
+              <div className="px-3 py-2 rounded-lg bg-[#FEF2F2] border border-[#DC2626]/40 text-[11px] font-mono-tabular font-semibold text-[#DC2626]">
+                {adNotice}
+              </div>
+            )}
+
+            <div className="flex items-center gap-2 pt-0.5">
+              <button
+                type="button"
+                disabled={isAdLoading}
+                onClick={onWatchAd}
+                className="flex-1 inline-flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg bg-[#111111] text-[#F5F3EE] font-display font-bold text-xs sm:text-sm shadow-[3px_3px_0px_#F59E0B] hover:bg-[#D97706] hover:text-[#111111] hover:shadow-[3px_3px_0px_#111111] disabled:opacity-55 transition-all cursor-pointer"
+              >
+                <Play className="w-4 h-4 fill-current shrink-0" />
+                <span>{isAdLoading ? 'Loading Rewarded Ad...' : 'Watch Ad · Light Ahead'}</span>
+              </button>
+
+              <button
+                type="button"
+                disabled={isAdLoading}
+                onClick={onClose}
+                className="py-2.5 px-3.5 rounded-lg border-2 border-[#111111]/25 bg-[#FFFFFF] text-[#111111] font-semibold text-xs sm:text-sm hover:border-[#111111] disabled:opacity-40 transition-colors cursor-pointer whitespace-nowrap"
+              >
+                Keep It Dark
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="pt-3.5 space-y-3">
+            <div className="p-3.5 rounded-lg bg-[#FFFFFF] border-2 border-[#F59E0B] shadow-[3px_3px_0px_rgba(245,158,11,0.28)] space-y-1.5">
+              <div className="inline-flex items-center gap-1.5 text-[10px] font-mono-tabular font-extrabold uppercase tracking-wider text-[#B45309]">
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                <span>Forward Light Active · Level {levelNumPadded}</span>
+              </div>
+              <p className="text-xs sm:text-sm text-[#111111] leading-snug">
+                Obstacles in front of you are now illuminated while darkness remains around you.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={onClose}
+              className="w-full inline-flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg bg-[#111111] text-[#F5F3EE] font-display font-bold text-xs sm:text-sm shadow-[2px_2px_0px_#F59E0B] hover:bg-[#D97706] hover:text-[#111111] transition-colors cursor-pointer"
+            >
+              Back to Game
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function GameCanvas({
   levelId,
   settings,
@@ -648,6 +931,15 @@ export function GameCanvas({
   const hintBlinkStartedAtRef = useRef<number | null>(null);
   const hintBlinkActiveKeyRef = useRef<string | null>(null);
   const lastSarcasticTextRef = useRef<string | null>(null);
+
+  // Rewarded-Ad-Gated Forward Light Boost state (Darkness Levels only)
+  const [darknessLightBoostByLevel, setDarknessLightBoostByLevel] = useState<
+    Record<number, boolean>
+  >({});
+  const [lightBoostModalOpen, setLightBoostModalOpen] = useState(false);
+  const [lightBoostAdLoading, setLightBoostAdLoading] = useState(false);
+  const [lightBoostAdNotice, setLightBoostAdNotice] = useState<string | null>(null);
+  const lightBoostNoticeTimerRef = useRef<number | null>(null);
 
   // Sync persisted per-level hint prop into local cache (and clear if progress was reset)
   useEffect(() => {
@@ -776,10 +1068,25 @@ export function GameCanvas({
     }
   }, [eligibleLockedHintKey, hintDisplay.enabled, paused]);
 
-  // Keep game paused and audio ducked while the Get Hint modal or Rewarded Ad is active
+  const isLightBoostActiveForLevel = Boolean(darknessLightBoostByLevel[hud.levelId]);
+
+  // Keep game paused and audio ducked while Get Hint / Light Boost modal or Rewarded Ad is active
   useEffect(() => {
-    onHintAdStateChange?.(hintModalOpen || hintAdLoading);
-  }, [hintModalOpen, hintAdLoading, onHintAdStateChange]);
+    onHintAdStateChange?.(
+      hintModalOpen || hintAdLoading || lightBoostModalOpen || lightBoostAdLoading,
+    );
+  }, [
+    hintModalOpen,
+    hintAdLoading,
+    lightBoostModalOpen,
+    lightBoostAdLoading,
+    onHintAdStateChange,
+  ]);
+
+  // Sync darkness forward-light boost status with the running canvas engine
+  useEffect(() => {
+    engineRef.current?.setDarknessLightBoost(isLightBoostActiveForLevel);
+  }, [isLightBoostActiveForLevel, hud.levelId]);
 
   const showHintNotice = (msg: string) => {
     setHintAdNotice(msg);
@@ -886,6 +1193,74 @@ export function GameCanvas({
     }
   };
 
+  const showLightBoostNotice = (msg: string) => {
+    setLightBoostAdNotice(msg);
+    if (lightBoostNoticeTimerRef.current !== null) {
+      window.clearTimeout(lightBoostNoticeTimerRef.current);
+    }
+    lightBoostNoticeTimerRef.current = window.setTimeout(() => {
+      setLightBoostAdNotice(null);
+      lightBoostNoticeTimerRef.current = null;
+    }, 3600);
+  };
+
+  const handleOpenLightBoostModal = () => {
+    if (!isHighIntensityDarknessLevel(hud.levelId) || lightBoostAdLoading) return;
+    audioManager.unlockAudio();
+    audioManager.playButtonClick();
+    engineRef.current?.clearInputs();
+    touchActiveRef.current = { left: false, right: false, jump: false };
+    setTouchState({ left: false, right: false, jump: false });
+    setLightBoostAdNotice(null);
+    setLightBoostModalOpen(true);
+  };
+
+  const handleCloseLightBoostModal = () => {
+    if (lightBoostAdLoading) return;
+    audioManager.playButtonClick();
+    setLightBoostModalOpen(false);
+    setLightBoostAdNotice(null);
+  };
+
+  const handleWatchLightBoostAd = async () => {
+    const targetLevelId = hud.levelId;
+    if (
+      !isHighIntensityDarknessLevel(targetLevelId) ||
+      lightBoostAdLoading ||
+      darknessLightBoostByLevel[targetLevelId]
+    ) {
+      return;
+    }
+
+    audioManager.unlockAudio();
+    audioManager.playButtonClick();
+    setLightBoostAdLoading(true);
+    setLightBoostAdNotice(null);
+
+    try {
+      const result = await adMobService.showRewardedLightBoostAd();
+      if (result.rewarded) {
+        setDarknessLightBoostByLevel((prev) => ({
+          ...prev,
+          [targetLevelId]: true,
+        }));
+        engineRef.current?.setDarknessLightBoost(true);
+        audioManager.playCheckpoint();
+        setLightBoostModalOpen(false);
+      } else if (result.reason === 'dismissed_early') {
+        showLightBoostNotice('Ad skipped early — darkness remains unchanged.');
+      } else if (result.reason === 'offline') {
+        showLightBoostNotice('Offline — ad unavailable, light boost not unlocked.');
+      } else {
+        showLightBoostNotice('No rewarded ad ready right now. Try again shortly.');
+      }
+    } catch {
+      showLightBoostNotice('Ad failed to load — darkness remains unchanged.');
+    } finally {
+      setLightBoostAdLoading(false);
+    }
+  };
+
   const [activeTaunt, setActiveTaunt] = useState<{
     id: number;
     text: string;
@@ -985,6 +1360,7 @@ export function GameCanvas({
         callbacksRef.current.onTrickTriggered(k);
       },
       onRenderDarknessMask: renderHighIntensityDarknessMask,
+      onRenderDangerVignette: renderDangerVignette,
       onLevelComplete: (stats) => callbacksRef.current.onLevelComplete(stats),
     });
 
@@ -1012,6 +1388,10 @@ export function GameCanvas({
         window.clearTimeout(hintBlinkTimerRef.current);
         hintBlinkTimerRef.current = null;
       }
+      if (lightBoostNoticeTimerRef.current !== null) {
+        window.clearTimeout(lightBoostNoticeTimerRef.current);
+        lightBoostNoticeTimerRef.current = null;
+      }
       onHintAdStateChange?.(false);
       engine.destroy();
       engineRef.current = null;
@@ -1032,6 +1412,8 @@ export function GameCanvas({
       setHintModalOpen(false);
       setActiveHintModalTarget(null);
       setHintAdNotice(null);
+      setLightBoostModalOpen(false);
+      setLightBoostAdNotice(null);
       engineRef.current?.loadLevel(levelId);
     }
   }, [levelId]);
@@ -1081,7 +1463,15 @@ export function GameCanvas({
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const engine = engineRef.current;
-      if (!engine || hintAdLoading) return;
+      if (!engine || hintAdLoading || lightBoostAdLoading) return;
+
+      if (lightBoostModalOpen) {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          handleCloseLightBoostModal();
+        }
+        return;
+      }
 
       if (hintModalOpen) {
         if (e.key === 'Escape') {
@@ -1156,7 +1546,15 @@ export function GameCanvas({
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('blur', onBlur);
     };
-  }, [paused, hintModalOpen, hintAdLoading, onPauseToggle, onToggleMute]);
+  }, [
+    paused,
+    hintModalOpen,
+    hintAdLoading,
+    lightBoostModalOpen,
+    lightBoostAdLoading,
+    onPauseToggle,
+    onToggleMute,
+  ]);
 
   const showTouchControls =
     settings.touchControls === 'always' || (settings.touchControls === 'auto' && isTouchDevice);
@@ -1339,6 +1737,51 @@ export function GameCanvas({
             <RotateCcw className="w-4 h-4" />
           </button>
 
+          {isDarkLevel && (
+            <button
+              type="button"
+              disabled={lightBoostAdLoading}
+              onClick={handleOpenLightBoostModal}
+              aria-label={
+                isLightBoostActiveForLevel
+                  ? 'Forward light boost active for this dark level'
+                  : 'Watch rewarded ad to illuminate obstacles ahead in the darkness'
+              }
+              title={
+                isLightBoostActiveForLevel
+                  ? 'Forward Light Active'
+                  : 'Light Ahead (Watch Ad)'
+              }
+              className={`h-10 relative inline-flex items-center gap-1.5 px-2.5 sm:px-3 rounded-lg border text-xs font-semibold transition-all whitespace-nowrap shrink-0 active:scale-95 ${
+                lightBoostAdLoading
+                  ? 'border-[#F59E0B]/40 bg-[#18181B] text-[#FDE68A] opacity-65 cursor-wait'
+                  : isLightBoostActiveForLevel
+                    ? 'border-[#F59E0B] bg-[#FEF3C7] text-[#92400E] shadow-[2px_2px_0px_rgba(245,158,11,0.4)] cursor-pointer'
+                    : 'border-[#F59E0B]/80 bg-[#18181B] text-[#FEF3C7] hover:bg-[#F59E0B] hover:text-[#111111] shadow-[2px_2px_0px_rgba(245,158,11,0.35)] cursor-pointer'
+              }`}
+            >
+              <span className="relative inline-flex items-center justify-center shrink-0">
+                <Sun
+                  className={`w-4 h-4 ${
+                    isLightBoostActiveForLevel ? 'text-[#D97706]' : 'text-[#FBBF24]'
+                  }`}
+                />
+                {!isLightBoostActiveForLevel && hud.levelDeaths >= 1 && !lightBoostAdLoading && (
+                  <span
+                    aria-hidden="true"
+                    className="absolute -top-0.5 -right-0.5 flex h-1.5 w-1.5"
+                  >
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#FBBF24] opacity-80" />
+                    <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-[#F59E0B]" />
+                  </span>
+                )}
+              </span>
+              <span className="hidden sm:inline">
+                {isLightBoostActiveForLevel ? 'Lit' : 'Light'}
+              </span>
+            </button>
+          )}
+
           {hintDisplay.showHeaderButton && (
             <button
               type="button"
@@ -1466,7 +1909,7 @@ export function GameCanvas({
           {activeTaunt && (
             <div
               key={`taunt-${activeTaunt.id}`}
-              className={`animate-taunt-slam max-w-md text-center px-4 py-2 rounded-lg bg-[#111111] text-[#F5F3EE] border-2 border-[#DC2626] shadow-[3px_3px_0px_rgba(220,38,38,0.35)] text-xs sm:text-sm font-medium ${
+              className={`animate-commentary-mock max-w-md text-center px-4 py-2 rounded-lg bg-[#111111] text-[#F5F3EE] border-2 border-[#DC2626] shadow-[3px_3px_0px_rgba(220,38,38,0.35)] text-xs sm:text-sm font-medium ${
                 activeTaunt.streakMilestone ? 'ring-2 ring-[#DC2626]/40' : ''
               }`}
             >
@@ -1481,7 +1924,7 @@ export function GameCanvas({
           {hud.prankBanner && (
             <div
               key={`prank-${hud.prankBannerId}`}
-              className="max-w-md text-center px-3.5 py-1 rounded-lg bg-[#FFFFFF] text-[#DC2626] border-2 border-[#111111] shadow-[3px_3px_0px_rgba(17,17,17,0.2)] text-[11px] sm:text-xs font-mono-tabular font-bold"
+              className="animate-commentary-mock max-w-md text-center px-3.5 py-1 rounded-lg bg-[#FFFFFF] text-[#DC2626] border-2 border-[#111111] shadow-[3px_3px_0px_rgba(17,17,17,0.2)] text-[11px] sm:text-xs font-mono-tabular font-bold"
             >
               {hud.prankBanner}
             </div>
@@ -1677,6 +2120,20 @@ export function GameCanvas({
           adNotice={hintAdNotice}
           onWatchAd={() => void handleWatchHintAd()}
           onClose={handleCloseHintModal}
+        />
+      )}
+
+      {/* Rewarded-Ad-Gated 'Illuminate Ahead' Modal (Darkness Levels Only) */}
+      {isDarkLevel && (
+        <LightBoostModal
+          isOpen={lightBoostModalOpen}
+          levelNumPadded={levelNumPadded}
+          levelName={hud.levelName}
+          isBoostActive={isLightBoostActiveForLevel}
+          isAdLoading={lightBoostAdLoading}
+          adNotice={lightBoostAdNotice}
+          onWatchAd={() => void handleWatchLightBoostAd()}
+          onClose={handleCloseLightBoostModal}
         />
       )}
 

@@ -142,6 +142,7 @@ interface RuntimeExit {
   revealAnim: number;
   quipText: string | null;
   quipTimer: number;
+  quipAge: number;
   legCycle: number;
   becameWall: boolean;
   elevatedReal: boolean;
@@ -197,6 +198,17 @@ export interface DarknessRenderFrame {
   flashAlpha: number;
   nearestHazardDistance: number;
   proximityRevealRadius: number;
+  lightBoostActive: boolean;
+}
+
+export interface DangerVignetteRenderFrame {
+  width: number;
+  height: number;
+  intensity: number; // smoothed 0..1 overall proximity + trap pressure
+  pulseBoost: number; // brief 0..1 surge when a trap triggers or high-difficulty obstacle passes close
+  worldTime: number;
+  isDarkLevel: boolean;
+  prefersReducedMotion: boolean;
 }
 
 export interface EngineCallbacks {
@@ -205,6 +217,7 @@ export interface EngineCallbacks {
   onDeathScreenOpen?: (snapshot: DeathLocationSnapshot) => void;
   onTrickTriggered: (kind: 'trap' | 'fake_reward' | 'fourth_wall') => void;
   onRenderDarknessMask?: (ctx: CanvasRenderingContext2D, frame: DarknessRenderFrame) => void;
+  onRenderDangerVignette?: (ctx: CanvasRenderingContext2D, frame: DangerVignetteRenderFrame) => void;
   onLevelComplete: (stats: {
     levelId: number;
     elapsedMs: number;
@@ -263,12 +276,18 @@ export class PlatformerEngine {
   private respawnPop = 1;
   private respawnInvulnTimer = 0;
   private lastSafeGroundedPos = { x: 80, y: 370 };
+  private safeGroundedTrail: Array<{ x: number; y: number; gravDir: 1 | -1 }> = [];
   private savedDeathSnapshot: DeathLocationSnapshot | null = null;
 
   // Fourth-wall state (cooldowns & freshness managed centrally by commentaryService)
   private lookingAtPlayer = false;
   private fourthWallBubble: string | null = null;
   private fourthWallBubbleTimer = 0;
+  private fourthWallBubbleAge = 0;
+  private readonly prefersReducedMotion =
+    typeof window !== 'undefined' &&
+    typeof window.matchMedia === 'function' &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   private autonomousCommentTimer = 10.5;
   private consecutiveQuickDeaths = 0;
   private midRunTauntStage: 0 | 1 | 2 = 0;
@@ -282,9 +301,10 @@ export class PlatformerEngine {
   private dynamicGravityScale: number | null = null;
   private checkpointGravityScale: number | null = null;
 
-  // Darkness lights-out controlled flash state
+  // Darkness lights-out controlled flash & rewarded forward-light boost state
   private darknessFlashAlpha = 0;
   private darknessFlashTimer = 2.8;
+  private darknessLightBoost = false;
 
   // Camera & juice
   private camX = 0;
@@ -294,6 +314,9 @@ export class PlatformerEngine {
   private shakeIntensity = 0;
   private hitstopTimer = 0;
   private deathFlashAlpha = 0;
+  private dangerVignetteIntensity = 0;
+  private dangerPulseBoost = 0;
+  private dangerPulseCooldown = 0;
   private worldTime = 0;
 
   // Entities
@@ -397,9 +420,22 @@ export class PlatformerEngine {
     this.checkpointCameraShiftBias = 0;
     this.darknessFlashAlpha = this.level.spotlightRadius ? 0.55 : 0;
     this.darknessFlashTimer = this.level.darknessFlashInterval ?? 4.8;
+    this.dangerVignetteIntensity = 0;
+    this.dangerPulseBoost = 0;
+    this.dangerPulseCooldown = 0;
+    if (!isRestart) {
+      this.darknessLightBoost = false;
+    }
     this.spawnX = this.level.spawn.x;
     this.spawnY = this.level.spawn.y;
     this.lastSafeGroundedPos = { x: this.level.spawn.x, y: this.level.spawn.y };
+    this.safeGroundedTrail = [
+      {
+        x: this.level.spawn.x,
+        y: this.level.spawn.y,
+        gravDir: (this.level.gravityScale ?? 1) < 0 ? -1 : 1,
+      },
+    ];
     this.savedDeathSnapshot = null;
     this.respawnInvulnTimer = 0;
     this.currentDeathMessage = null;
@@ -415,8 +451,7 @@ export class PlatformerEngine {
       force: true,
       nowMs: this.worldTime * 1000,
     });
-    this.fourthWallBubble = entryRemark?.text ?? null;
-    this.fourthWallBubbleTimer = entryRemark?.durationSec ?? 0;
+    this.setFourthWallBubble(entryRemark?.text ?? null, entryRemark?.durationSec ?? 0);
     this.autonomousCommentTimer = commentaryService.getNextAmbientDelaySeconds(levelId, 0);
     this.lookingAtPlayer = true;
     this.midRunTauntStage = 0;
@@ -433,11 +468,15 @@ export class PlatformerEngine {
     this.loadLevel(this.level.id, true);
   }
 
+  public setDarknessLightBoost(active: boolean): void {
+    this.darknessLightBoost = Boolean(active);
+  }
+
   /**
    * Rewarded Ad Extra-Life Respawn:
-   * Restores the player directly at the exact saved death location without
-   * restarting the level or sending them back to the starting point, preserving
-   * timer, progress, checkpoints, and world state.
+   * Restores the player onto a verified safe surface a short distance away from
+   * the obstacle where they died (never directly on top of spikes or traps),
+   * while preserving timer, progress, checkpoints, and world state.
    */
   public respawnAtSavedDeathLocation(): boolean {
     const snap = this.savedDeathSnapshot;
@@ -447,12 +486,14 @@ export class PlatformerEngine {
     this.pendingFullStartReset = false;
     this.clearInputs();
 
-    // Restore any collapsed tile or landed falling block right at the respawn footprint
-    // so the player is never trapped inside/above an empty void immediately upon respawn.
+    // Restore any collapsed/shifted tile or triggered trap near BOTH the safe respawn
+    // footprint and the lethal obstacle ahead so the player gets a clean, fair retry.
     for (const p of this.platforms) {
-      const nearHoriz =
-        snap.respawnX + PLAYER_W > p.def.x - 24 && snap.respawnX < p.def.x + p.def.w + 24;
-      if (!nearHoriz) continue;
+      const nearRespawn =
+        snap.respawnX + PLAYER_W > p.def.x - 36 && snap.respawnX < p.def.x + p.def.w + 36;
+      const nearDeath =
+        snap.exactX + PLAYER_W > p.def.x - 44 && snap.exactX < p.def.x + p.def.w + 44;
+      if (!nearRespawn && !nearDeath) continue;
       if (p.def.kind === 'fake_drop' && p.dropState !== 'idle') {
         p.x = p.def.x;
         p.y = p.def.y;
@@ -469,6 +510,11 @@ export class PlatformerEngine {
         p.active = p.revealed;
         p.shrinkActive = false;
         p.shrinkRespawnTimer = 0;
+      } else if (p.def.kind === 'phase_blink' && p.revealed) {
+        p.active = true;
+        p.blinkTimer = 0;
+        p.blinkWarning = false;
+        p.blinkOffProgress = 0;
       } else if (p.def.kind === 'proximity_shift' && p.shiftTriggered) {
         p.x = p.def.x;
         p.y = p.def.y;
@@ -481,26 +527,41 @@ export class PlatformerEngine {
       }
     }
     for (const h of this.hazards) {
-      if (h.def.kind === 'falling_block' && h.fallState !== 'idle') {
-        const near =
-          snap.respawnX + PLAYER_W > h.def.x - 28 && snap.respawnX < h.def.x + h.def.w + 28;
-        if (near) {
-          h.x = h.def.x;
-          h.y = h.def.y;
-          h.fallState = 'idle';
-          h.fallVy = 0;
-          h.fallTimer = 0;
-        }
+      const nearZone =
+        (snap.respawnX + PLAYER_W > h.def.x - 64 && snap.respawnX < h.def.x + h.def.w + 64) ||
+        (snap.exactX + PLAYER_W > h.def.x - 64 && snap.exactX < h.def.x + h.def.w + 64);
+
+      if (h.def.kind === 'falling_block' && h.fallState !== 'idle' && nearZone) {
+        h.x = h.def.x;
+        h.y = h.def.y;
+        h.fallState = 'idle';
+        h.fallVy = 0;
+        h.fallTimer = 0;
       } else if (h.def.kind === 'chaser' && h.chaserActive) {
         h.x = Math.min(h.x, Math.max(h.def.x, snap.respawnX - 240));
-      } else if (h.def.kind === 'sliding_spike' && h.slideTriggered) {
+      } else if (h.def.kind === 'sliding_spike' && h.slideTriggered && nearZone) {
         h.x = h.def.x;
         h.slideTriggered = false;
+      } else if (h.def.kind === 'popup_spike' && h.popupState !== 'hidden' && nearZone) {
+        h.popupState = 'hidden';
+        h.popupTimer = 0;
+        h.popupExtend = 0;
+        h.popupCycleTimer = 0;
+      } else if (h.def.kind === 'retract_spike' && h.retractTriggered && nearZone) {
+        h.retractTriggered = false;
+        h.popupExtend = 1;
       }
     }
 
-    this.px = snap.respawnX;
-    this.py = snap.respawnY;
+    // Re-validate against restored platforms/hazards so respawn never overlaps an obstacle
+    const safeSpot = this.computeSafeRespawnSpot(snap.exactX, snap.exactY, snap.cause, {
+      x: snap.respawnX,
+      y: snap.respawnY,
+    });
+
+    this.px = safeSpot.x;
+    this.py = safeSpot.y;
+    this.lastSafeGroundedPos = { x: safeSpot.x, y: safeSpot.y };
     this.vx = 0;
     this.vy = 0;
     this.facing = snap.facing;
@@ -512,9 +573,12 @@ export class PlatformerEngine {
     this.stateTimer = 0.18;
     this.respawnPop = 0.35;
     this.respawnInvulnTimer = 1.65;
+    this.dangerVignetteIntensity = 0;
+    this.dangerPulseBoost = 0;
+    this.dangerPulseCooldown = 0;
+    commentaryService.resetUnbrokenStretch();
     this.stickmanGhostTrail.clear();
-    this.fourthWallBubble = "Back from the dead. Don't waste it.";
-    this.fourthWallBubbleTimer = 2.4;
+    this.setFourthWallBubble("Back from the dead. Don't waste it.", 2.4);
     this.lookingAtPlayer = true;
 
     this.camX = this.clampCameraX(this.px + PLAYER_W / 2 - VIEW_WIDTH * 0.42);
@@ -539,6 +603,13 @@ export class PlatformerEngine {
       this.spawnX = this.level.spawn.x;
       this.spawnY = this.level.spawn.y;
       this.lastSafeGroundedPos = { x: this.level.spawn.x, y: this.level.spawn.y };
+      this.safeGroundedTrail = [
+        {
+          x: this.level.spawn.x,
+          y: this.level.spawn.y,
+          gravDir: (this.level.gravityScale ?? 1) < 0 ? -1 : 1,
+        },
+      ];
       this.revealedTriggers.clear();
       this.dynamicGravityScale = null;
       this.checkpointGravityScale = null;
@@ -550,13 +621,337 @@ export class PlatformerEngine {
       this.lastSafeGroundedPos = { x: this.spawnX, y: this.spawnY };
       this.dynamicGravityScale = this.checkpointGravityScale;
       this.cameraShiftBias = this.checkpointCameraShiftBias;
+      this.safeGroundedTrail = [
+        {
+          x: this.spawnX,
+          y: this.spawnY,
+          gravDir: (this.dynamicGravityScale ?? this.level.gravityScale ?? 1) < 0 ? -1 : 1,
+        },
+      ];
     }
     this.darknessFlashAlpha = this.level.spotlightRadius ? 0.45 : 0;
     this.darknessFlashTimer = this.level.darknessFlashInterval ?? 4.8;
+    this.dangerVignetteIntensity = 0;
+    this.dangerPulseBoost = 0;
+    this.dangerPulseCooldown = 0;
     this.respawnInvulnTimer = 0;
     this.buildEntities(!keepCheckpoint);
     this.respawnPlayerInstant();
     this.emitHud();
+  }
+
+  /**
+   * Returns true if placing the player hitbox at (x, y) keeps a comfortable buffer
+   * away from spikes, popup traps, sliding blades, falling blocks, saws, sweepers,
+   * and fake-drop trapdoors.
+   */
+  private isSpotClearOfHazards(
+    x: number,
+    y: number,
+    gravDir: 1 | -1,
+    marginX: number,
+    marginY: number,
+  ): boolean {
+    const pxCenter = x + PLAYER_W / 2;
+
+    // Never respawn directly on top of a fake_drop trapdoor
+    for (const p of this.platforms) {
+      if (!p.revealed || p.def.kind !== 'fake_drop') continue;
+      const onFakeDropX = x + PLAYER_W > p.def.x - 8 && x < p.def.x + p.def.w + 8;
+      const surfaceY = gravDir > 0 ? p.def.y - PLAYER_H : p.def.y + p.def.h;
+      if (onFakeDropX && Math.abs(y - surfaceY) < 28) {
+        return false;
+      }
+    }
+
+    for (const h of this.hazards) {
+      if (!h.revealed) continue;
+      const kind = h.def.kind;
+
+      if (kind === 'spike' || kind === 'retract_spike') {
+        if (
+          this.overlaps(
+            x - marginX,
+            y - marginY,
+            PLAYER_W + marginX * 2,
+            PLAYER_H + marginY * 2,
+            h.x,
+            h.y,
+            h.w,
+            h.h,
+          )
+        ) {
+          return false;
+        }
+      } else if (kind === 'popup_spike') {
+        if (
+          this.overlaps(
+            x - marginX,
+            y - marginY,
+            PLAYER_W + marginX * 2,
+            PLAYER_H + marginY * 2,
+            h.def.x,
+            h.def.y,
+            h.def.w,
+            h.def.h,
+          )
+        ) {
+          return false;
+        }
+        // Also stay clear of the dormant popup trigger zone so it doesn't erupt immediately
+        const trigX = h.def.triggerX ?? h.def.x + h.def.w / 2;
+        const trigR = (h.def.triggerRadius ?? 68) + 14;
+        const verticallyNear =
+          y + PLAYER_H >= h.def.y - 44 && y <= h.def.y + h.def.h + 44;
+        if (verticallyNear && Math.abs(pxCenter - trigX) < trigR) {
+          return false;
+        }
+      } else if (kind === 'sliding_spike') {
+        const slideX = h.def.slideX ?? -68;
+        const minX = Math.min(h.def.x, h.def.x + slideX);
+        const maxX = Math.max(h.def.x + h.def.w, h.def.x + slideX + h.def.w);
+        if (
+          this.overlaps(
+            x - marginX,
+            y - marginY,
+            PLAYER_W + marginX * 2,
+            PLAYER_H + marginY * 2,
+            minX,
+            h.def.y,
+            maxX - minX,
+            h.def.h,
+          )
+        ) {
+          return false;
+        }
+      } else if (kind === 'falling_block') {
+        // Avoid both current block position and its vertical drop column underneath
+        const colY = gravDir > 0 ? h.def.y : 0;
+        const colH =
+          gravDir > 0
+            ? Math.max(h.def.h, this.level.worldHeight - h.def.y)
+            : h.def.y + h.def.h;
+        if (
+          this.overlaps(
+            x - marginX * 0.75,
+            y - marginY,
+            PLAYER_W + marginX * 1.5,
+            PLAYER_H + marginY * 2,
+            h.def.x,
+            colY,
+            h.def.w,
+            colH,
+          ) ||
+          this.overlaps(
+            x - marginX,
+            y - marginY,
+            PLAYER_W + marginX * 2,
+            PLAYER_H + marginY * 2,
+            h.x,
+            h.y,
+            h.w,
+            h.h,
+          )
+        ) {
+          return false;
+        }
+      } else if (kind === 'saw' || kind === 'sweeper' || kind === 'chaser') {
+        if (!h.active) continue;
+        if (
+          this.overlaps(
+            x - marginX,
+            y - marginY,
+            PLAYER_W + marginX * 2,
+            PLAYER_H + marginY * 2,
+            h.x,
+            h.y,
+            h.w,
+            h.h,
+          )
+        ) {
+          return false;
+        }
+      }
+    }
+
+    return true;
+  }
+
+  /**
+   * Finds a valid supporting platform surface at horizontal coordinate `x` near `refY`,
+   * ensuring the player stands cleanly on the platform without clipping into ceilings or walls.
+   */
+  private findSafePlatformSurfaceAtX(
+    x: number,
+    refY: number,
+    gravDir: 1 | -1,
+    allowTransient: boolean,
+  ): number | null {
+    if (x < 8 || x > this.level.worldWidth - PLAYER_W - 8) return null;
+
+    let bestY: number | null = null;
+    let bestDist = Infinity;
+
+    for (const p of this.platforms) {
+      if (!p.revealed) continue;
+      const k = p.def.kind;
+      if (
+        k === 'fake_drop' ||
+        k === 'phantom_solid' ||
+        k === 'bounce' ||
+        k === 'elevator' ||
+        k === 'proximity_shift'
+      ) {
+        continue;
+      }
+      const isTransient =
+        k === 'crumble' || k === 'shrink' || k === 'phase_blink' || k === 'look_away';
+      if (isTransient && !allowTransient) continue;
+      if (!p.active && !isTransient) continue;
+
+      const edgePad = isTransient ? 0 : 2;
+      const platX = isTransient ? p.def.x : p.x;
+      const platW = isTransient ? p.def.w : p.w;
+      const platY = isTransient ? p.def.y : p.y;
+      const platH = isTransient ? p.def.h : p.h;
+
+      if (x < platX + edgePad || x + PLAYER_W > platX + platW - edgePad) continue;
+
+      const candY = gravDir > 0 ? platY - PLAYER_H : platY + platH;
+      if (candY < 20 || candY > this.level.worldHeight - PLAYER_H - 12) continue;
+
+      // Ensure player body does not collide with any other solid platform or bricked wall
+      let blocked = false;
+      for (const other of this.platforms) {
+        if (other === p || !other.revealed || !other.active) continue;
+        if (other.def.kind === 'phantom_solid') continue;
+        if (
+          this.overlaps(
+            x + 1,
+            candY + 1,
+            PLAYER_W - 2,
+            PLAYER_H - 2,
+            other.x,
+            other.y,
+            other.w,
+            other.h,
+          )
+        ) {
+          blocked = true;
+          break;
+        }
+      }
+      if (!blocked) {
+        for (const ex of this.exits) {
+          if (!ex.revealed || !ex.becameWall) continue;
+          if (this.overlaps(x, candY, PLAYER_W, PLAYER_H, ex.x - 23, ex.y - 68, 46, 68)) {
+            blocked = true;
+            break;
+          }
+        }
+      }
+      if (blocked) continue;
+
+      const distY = Math.abs(candY - refY);
+      if (distY < bestDist) {
+        bestDist = distY;
+        bestY = candY;
+      }
+    }
+
+    return bestDist <= 190 ? bestY : null;
+  }
+
+  /**
+   * Solves for a safe respawn spot a short distance away from the lethal obstacle
+   * where the player died (never directly over spikes, traps, or voids, and never
+   * teleporting forward past an unbeaten obstacle).
+   */
+  private computeSafeRespawnSpot(
+    deathX: number,
+    deathY: number,
+    cause: DeathCause,
+    preferredSpot?: { x: number; y: number },
+  ): { x: number; y: number } {
+    const gravDir: 1 | -1 = (this.dynamicGravityScale ?? this.level.gravityScale ?? 1) < 0 ? -1 : 1;
+
+    // If a previously computed safe spot is still valid and comfortably clear of hazards, keep it
+    if (preferredSpot) {
+      const distFromDeath = Math.hypot(preferredSpot.x - deathX, preferredSpot.y - deathY);
+      const surfY = this.findSafePlatformSurfaceAtX(preferredSpot.x, preferredSpot.y, gravDir, true);
+      if (
+        surfY !== null &&
+        (cause === 'pit' || distFromDeath >= 40) &&
+        this.isSpotClearOfHazards(preferredSpot.x, surfY, gravDir, 36, 14)
+      ) {
+        return { x: preferredSpot.x, y: surfY };
+      }
+    }
+
+    // Step back toward the direction the player came from (default left = -1)
+    const backDir: 1 | -1 =
+      this.facing === -1 && this.lastSafeGroundedPos.x > deathX + 28 ? 1 : -1;
+
+    // Pass 1: Nearest stable safe surface 54..350px behind the lethal obstacle
+    for (let offset = 54; offset <= 350; offset += 14) {
+      const candX = Math.max(
+        8,
+        Math.min(this.level.worldWidth - PLAYER_W - 8, deathX + backDir * offset),
+      );
+      const candY = this.findSafePlatformSurfaceAtX(candX, deathY, gravDir, false);
+      if (candY !== null && this.isSpotClearOfHazards(candX, candY, gravDir, 44, 16)) {
+        return { x: candX, y: candY };
+      }
+    }
+
+    // Pass 2: Most recent verified safe breadcrumb from the player's own grounded trail
+    for (let i = this.safeGroundedTrail.length - 1; i >= 0; i--) {
+      const pt = this.safeGroundedTrail[i];
+      if (pt.gravDir !== gravDir) continue;
+      if (cause !== 'pit' && Math.hypot(pt.x - deathX, pt.y - deathY) < 42) continue;
+      const surfY = this.findSafePlatformSurfaceAtX(pt.x, pt.y, gravDir, false);
+      if (surfY !== null && this.isSpotClearOfHazards(pt.x, surfY, gravDir, 38, 14)) {
+        return { x: pt.x, y: surfY };
+      }
+    }
+
+    // Pass 3: Relaxed scan (44..460px behind) allowing restored transient ledges (skyways)
+    for (let offset = 44; offset <= 460; offset += 14) {
+      const candX = Math.max(
+        8,
+        Math.min(this.level.worldWidth - PLAYER_W - 8, deathX + backDir * offset),
+      );
+      const candY = this.findSafePlatformSurfaceAtX(candX, deathY, gravDir, true);
+      if (candY !== null && this.isSpotClearOfHazards(candX, candY, gravDir, 30, 12)) {
+        return { x: candX, y: candY };
+      }
+    }
+
+    // Pass 4: Relaxed breadcrumb trail check
+    for (let i = this.safeGroundedTrail.length - 1; i >= 0; i--) {
+      const pt = this.safeGroundedTrail[i];
+      if (pt.gravDir !== gravDir) continue;
+      const surfY = this.findSafePlatformSurfaceAtX(pt.x, pt.y, gravDir, true);
+      if (surfY !== null && this.isSpotClearOfHazards(pt.x, surfY, gravDir, 22, 10)) {
+        return { x: pt.x, y: surfY };
+      }
+    }
+
+    // Pass 5: Safe fallback to lastSafeGroundedPos or active checkpoint/level spawn
+    const lastSurfY = this.findSafePlatformSurfaceAtX(
+      this.lastSafeGroundedPos.x,
+      this.lastSafeGroundedPos.y,
+      gravDir,
+      true,
+    );
+    if (
+      lastSurfY !== null &&
+      this.isSpotClearOfHazards(this.lastSafeGroundedPos.x, lastSurfY, gravDir, 20, 8)
+    ) {
+      return { x: this.lastSafeGroundedPos.x, y: lastSurfY };
+    }
+
+    return { x: this.spawnX, y: this.spawnY };
   }
 
   private isEntityVisibleByTriggers(
@@ -853,6 +1248,7 @@ export class PlatformerEngine {
         revealAnim: revealed ? 1 : 0,
         quipText: null,
         quipTimer: 0,
+        quipAge: 0,
         legCycle: 0,
         becameWall: alreadyTriggered && def.fakeBehavior === 'become_wall',
         elevatedReal: alreadyTriggered && def.fakeBehavior === 'elevate_trap',
@@ -935,7 +1331,11 @@ export class PlatformerEngine {
     this.state = 'respawning';
     this.stateTimer = 0.22;
     this.respawnPop = 0.2;
+    this.dangerVignetteIntensity = 0;
+    this.dangerPulseBoost = 0;
+    this.dangerPulseCooldown = 0;
     this.midRunTauntStage = 0;
+    commentaryService.resetUnbrokenStretch();
     this.autonomousCommentTimer = commentaryService.getNextAmbientDelaySeconds(
       this.level.id,
       this.levelDeaths,
@@ -997,8 +1397,10 @@ export class PlatformerEngine {
     }
     if (this.fourthWallBubbleTimer > 0) {
       this.fourthWallBubbleTimer -= dt;
+      this.fourthWallBubbleAge += dt;
       if (this.fourthWallBubbleTimer <= 0) {
         this.fourthWallBubble = null;
+        this.fourthWallBubbleAge = 0;
       }
     }
 
@@ -1028,6 +1430,7 @@ export class PlatformerEngine {
     // Freeze world simulation cleanly while the Death Screen is presented
     // so exact death position & gameplay state remain preserved for rewarded respawn.
     if (this.state === 'death_screen') {
+      this.updateDangerVignette(dt);
       this.updateParticles(dt);
       this.updateGhostTrail(dt, false);
       return;
@@ -1083,6 +1486,7 @@ export class PlatformerEngine {
       this.updatePlayer(dt);
     }
 
+    this.updateDangerVignette(dt);
     this.updateGhostTrail(dt, true);
 
     // Smooth camera tracking with slight look-ahead + optional switch-triggered camera bias
@@ -1190,8 +1594,7 @@ export class PlatformerEngine {
         });
         if (remark) {
           this.midRunTauntStage = 2;
-          this.fourthWallBubble = remark.text;
-          this.fourthWallBubbleTimer = remark.durationSec;
+          this.setFourthWallBubble(remark.text, remark.durationSec);
           this.autonomousCommentTimer = commentaryService.getNextAmbientDelaySeconds(
             this.level.id,
             this.levelDeaths,
@@ -1209,8 +1612,7 @@ export class PlatformerEngine {
         });
         if (remark) {
           this.midRunTauntStage = 1;
-          this.fourthWallBubble = remark.text;
-          this.fourthWallBubbleTimer = remark.durationSec;
+          this.setFourthWallBubble(remark.text, remark.durationSec);
           this.autonomousCommentTimer = commentaryService.getNextAmbientDelaySeconds(
             this.level.id,
             this.levelDeaths,
@@ -1236,8 +1638,7 @@ export class PlatformerEngine {
             nowMs,
           });
           if (remark) {
-            this.fourthWallBubble = remark.text;
-            this.fourthWallBubbleTimer = remark.durationSec;
+            this.setFourthWallBubble(remark.text, remark.durationSec);
             this.autonomousCommentTimer = commentaryService.getNextAmbientDelaySeconds(
               this.level.id,
               this.levelDeaths,
@@ -1245,6 +1646,28 @@ export class PlatformerEngine {
           }
         }
       }
+    }
+
+    // Random interjection timer for long, unbroken stretches of gameplay (non-level-specific insults)
+    const interjectionRemark = commentaryService.tickRandomInterjection(
+      dt,
+      {
+        levelId: this.level.id,
+        levelDeaths: this.levelDeaths,
+        totalDeaths: this.totalDeathsGlobal,
+        progressRatio: progress,
+        elapsedMs: Math.round(this.levelTime * 1000),
+        nowMs,
+      },
+      !this.fourthWallBubble,
+    );
+    if (interjectionRemark) {
+      this.setFourthWallBubble(interjectionRemark.text, interjectionRemark.durationSec);
+      this.lookingAtPlayer = true;
+      this.autonomousCommentTimer = commentaryService.getNextAmbientDelaySeconds(
+        this.level.id,
+        this.levelDeaths,
+      );
     }
 
     // Measured ambient muttering on a generous cooldown (never continuous spam)
@@ -1260,8 +1683,7 @@ export class PlatformerEngine {
           nowMs,
         });
         if (remark) {
-          this.fourthWallBubble = remark.text;
-          this.fourthWallBubbleTimer = remark.durationSec;
+          this.setFourthWallBubble(remark.text, remark.durationSec);
           this.lookingAtPlayer = true;
         }
         this.autonomousCommentTimer = commentaryService.getNextAmbientDelaySeconds(
@@ -1322,8 +1744,7 @@ export class PlatformerEngine {
           nowMs: this.worldTime * 1000,
         });
         if (remark) {
-          this.fourthWallBubble = remark.text;
-          this.fourthWallBubbleTimer = remark.durationSec;
+          this.setFourthWallBubble(remark.text, remark.durationSec);
         }
       }
       audioManager.playJump();
@@ -1492,7 +1913,7 @@ export class PlatformerEngine {
             }
           }
 
-          // Record last stable grounded footing for safe exact-edge pit recovery
+          // Record genuinely hazard-free grounded footing for safe respawn placement
           if (
             p.def.kind === 'solid' ||
             p.def.kind === 'moving' ||
@@ -1506,10 +1927,21 @@ export class PlatformerEngine {
               p.x + 2,
               Math.min(p.x + p.w - PLAYER_W - 2, this.px),
             );
-            this.lastSafeGroundedPos = {
-              x: safeX,
-              y: gravDir > 0 ? p.y - PLAYER_H : p.y + p.h,
-            };
+            const safeY = gravDir > 0 ? p.y - PLAYER_H : p.y + p.h;
+            if (this.isSpotClearOfHazards(safeX, safeY, gravDir, 30, 12)) {
+              this.lastSafeGroundedPos = { x: safeX, y: safeY };
+              const prev = this.safeGroundedTrail[this.safeGroundedTrail.length - 1];
+              if (
+                !prev ||
+                prev.gravDir !== gravDir ||
+                Math.hypot(safeX - prev.x, safeY - prev.y) >= 26
+              ) {
+                this.safeGroundedTrail.push({ x: safeX, y: safeY, gravDir });
+                if (this.safeGroundedTrail.length > 32) {
+                  this.safeGroundedTrail.shift();
+                }
+              }
+            }
           }
 
           // Handle special platform interactions on landing/standing
@@ -2188,8 +2620,7 @@ export class PlatformerEngine {
             nowMs: this.worldTime * 1000,
           });
           if (cpRemark) {
-            this.fourthWallBubble = cpRemark.text;
-            this.fourthWallBubbleTimer = cpRemark.durationSec;
+            this.setFourthWallBubble(cpRemark.text, cpRemark.durationSec);
           }
           this.autonomousCommentTimer = commentaryService.getNextAmbientDelaySeconds(
             this.level.id,
@@ -2214,7 +2645,11 @@ export class PlatformerEngine {
 
       if (ex.quipTimer > 0) {
         ex.quipTimer -= dt;
-        if (ex.quipTimer <= 0) ex.quipText = null;
+        ex.quipAge += dt;
+        if (ex.quipTimer <= 0) {
+          ex.quipText = null;
+          ex.quipAge = 0;
+        }
       }
 
       if (ex.lockedNoticeCooldown > 0) {
@@ -2255,8 +2690,7 @@ export class PlatformerEngine {
             nowMs: this.worldTime * 1000,
           });
           if (nearRemark) {
-            this.fourthWallBubble = nearRemark.text;
-            this.fourthWallBubbleTimer = nearRemark.durationSec;
+            this.setFourthWallBubble(nearRemark.text, nearRemark.durationSec);
             this.lookingAtPlayer = true;
           }
         }
@@ -2275,8 +2709,7 @@ export class PlatformerEngine {
           ex.x = Math.min(ex.def.retreatMaxX, ex.x + ex.def.retreatSpeed * dt);
           ex.legCycle += dt * 18;
           if (!ex.quipText) {
-            ex.quipText = 'Too slow!';
-            ex.quipTimer = 1.6;
+            this.setExitQuip(ex, 'Too slow!', 1.6);
           }
         }
       }
@@ -2290,8 +2723,7 @@ export class PlatformerEngine {
           ex.targetY = next.y;
           ex.moveIndex += 1;
           ex.moving = true;
-          ex.quipText = next.quip ?? 'Nope!';
-          ex.quipTimer = 2.4;
+          this.setExitQuip(ex, next.quip ?? 'Nope!', 2.4);
           audioManager.playTrap();
           this.recordTrick('trap');
           if (next.revealsTriggerId) {
@@ -2345,8 +2777,7 @@ export class PlatformerEngine {
             elapsedMs: Math.round(this.levelTime * 1000),
             nowMs: this.worldTime * 1000,
           });
-          this.fourthWallBubble = victoryRemark.text;
-          this.fourthWallBubbleTimer = victoryRemark.durationSec;
+          this.setFourthWallBubble(victoryRemark.text, victoryRemark.durationSec);
           this.lookingAtPlayer = true;
           audioManager.playLevelComplete();
           this.spawnDust(ex.x, ex.y - 30, 24, '#DC2626');
@@ -2380,8 +2811,7 @@ export class PlatformerEngine {
       nowMs: this.worldTime * 1000,
     });
     if (fakeExitRemark) {
-      this.fourthWallBubble = fakeExitRemark.text;
-      this.fourthWallBubbleTimer = fakeExitRemark.durationSec;
+      this.setFourthWallBubble(fakeExitRemark.text, fakeExitRemark.durationSec);
       this.lookingAtPlayer = true;
     }
 
@@ -2392,8 +2822,7 @@ export class PlatformerEngine {
       ex.vanished = true;
     } else if (behavior === 'become_wall') {
       ex.becameWall = true;
-      ex.quipText = 'Solid brick now!';
-      ex.quipTimer = 2.4;
+      this.setExitQuip(ex, 'Solid brick now!', 2.4);
       this.spawnDust(ex.x, ex.y - 34, 20, '#111111');
       this.triggerShake(0.24, 7);
     } else if (behavior === 'elevate_trap' && ex.def.shiftTo) {
@@ -2401,23 +2830,20 @@ export class PlatformerEngine {
       ex.targetY = ex.def.shiftTo.y;
       ex.moving = true;
       ex.elevatedReal = true;
-      ex.quipText = 'Jump for it!';
-      ex.quipTimer = 2.6;
+      this.setExitQuip(ex, 'Jump for it!', 2.6);
       this.spawnDust(ex.x, ex.y - 34, 18, '#DC2626');
       this.triggerShake(0.22, 6);
     } else if (behavior === 'teleport_shift' && ex.def.shiftTo) {
       this.spawnDust(ex.x, ex.y - 34, 18, '#DC2626');
       ex.x = ex.def.shiftTo.x;
       ex.y = ex.def.shiftTo.y;
-      ex.quipText = 'Missed me!';
-      ex.quipTimer = 2.2;
+      this.setExitQuip(ex, 'Missed me!', 2.2);
       this.spawnDust(ex.x, ex.y - 34, 18, '#111111');
     } else if (behavior === 'sprint_away' && ex.def.shiftTo) {
       ex.targetX = ex.def.shiftTo.x;
       ex.targetY = ex.def.shiftTo.y;
       ex.moving = true;
-      ex.quipText = 'Catch me!';
-      ex.quipTimer = 2.4;
+      this.setExitQuip(ex, 'Catch me!', 2.4);
     } else {
       this.triggerShake(0.25, 7);
     }
@@ -2509,6 +2935,9 @@ export class PlatformerEngine {
 
   private recordTrick(kind: 'trap' | 'fake_reward' | 'fourth_wall'): void {
     this.tricksInLevel += 1;
+    if (kind === 'trap') {
+      this.triggerDangerPulse(0.68);
+    }
     this.callbacks.onTrickTriggered(kind);
     if ((kind === 'fake_reward' || kind === 'trap') && !this.fourthWallBubble) {
       const trigger = kind === 'fake_reward' ? 'fake_reward' : 'trap';
@@ -2519,11 +2948,263 @@ export class PlatformerEngine {
         nowMs: this.worldTime * 1000,
       });
       if (remark) {
-        this.fourthWallBubble = remark.text;
-        this.fourthWallBubbleTimer = remark.durationSec;
+        this.setFourthWallBubble(remark.text, remark.durationSec);
         this.lookingAtPlayer = true;
       }
     }
+  }
+
+  private triggerDangerPulse(strength: number): void {
+    if (this.dangerPulseCooldown > 0) return;
+    const clamped = Math.max(0, Math.min(1, strength));
+    if (clamped <= this.dangerPulseBoost * 0.82) return;
+    this.dangerPulseBoost = Math.max(this.dangerPulseBoost, clamped);
+    this.dangerPulseCooldown = 0.36;
+  }
+
+  /**
+   * Evaluates psychological proximity tension (0..1) from nearby traps, active
+   * high-difficulty obstacles, unstable trap platforms, and hostile zones.
+   */
+  private computeDangerPressure(): number {
+    const pcx = this.px + PLAYER_W * 0.5;
+    const pcy = this.py + PLAYER_H * 0.5;
+    let peakPressure = 0;
+
+    for (const h of this.hazards) {
+      if (!h.active || !h.revealed) continue;
+      const closestX = Math.max(h.x, Math.min(pcx, h.x + h.w));
+      const closestY = Math.max(h.y, Math.min(pcy, h.y + h.h));
+      const dist = Math.hypot(pcx - closestX, pcy - closestY);
+
+      let radius = 0;
+      let weight = 0;
+      let isHighDifficulty = false;
+
+      switch (h.def.kind) {
+        case 'chaser':
+          if (h.chaserActive) {
+            radius = 235;
+            weight = 1.0;
+            isHighDifficulty = true;
+          } else {
+            const triggerX = h.def.triggerX ?? h.x;
+            const dTrig = Math.abs(pcx - triggerX);
+            if (dTrig < 90) {
+              peakPressure = Math.max(peakPressure, (1 - dTrig / 90) * 0.34);
+            }
+            continue;
+          }
+          break;
+        case 'saw':
+        case 'sweeper':
+          radius = 168;
+          weight = 0.94;
+          isHighDifficulty = true;
+          break;
+        case 'falling_block':
+          if (h.fallState === 'shaking' || h.fallState === 'falling') {
+            radius = 178;
+            weight = 0.96;
+            isHighDifficulty = true;
+          } else if (h.fallState === 'idle') {
+            const triggerX = h.def.fallTriggerX ?? h.x + h.w * 0.5;
+            const dxTrig = Math.abs(pcx - triggerX);
+            if (dxTrig < 92 && pcy >= h.y - 24) {
+              const p = 1 - dxTrig / 92;
+              peakPressure = Math.max(peakPressure, p * p * 0.44);
+            }
+            continue;
+          } else {
+            continue;
+          }
+          break;
+        case 'popup_spike':
+          if (h.popupState === 'telegraph' || h.popupState === 'up') {
+            radius = 152;
+            weight = 0.92;
+            isHighDifficulty = true;
+          } else if (h.popupState === 'hidden') {
+            const trigRadius = h.def.triggerRadius ?? 82;
+            const trigX = h.def.triggerX ?? h.x + h.w * 0.5;
+            const dTrig = Math.hypot(pcx - trigX, (pcy - (h.y + h.h * 0.5)) * 0.7);
+            if (dTrig < trigRadius * 1.25) {
+              const p = 1 - dTrig / (trigRadius * 1.25);
+              peakPressure = Math.max(peakPressure, p * p * 0.48);
+            }
+            continue;
+          } else {
+            continue;
+          }
+          break;
+        case 'sliding_spike':
+          if (h.slideTriggered) {
+            radius = 156;
+            weight = 0.92;
+            isHighDifficulty = true;
+          } else {
+            const trigX = h.def.triggerX ?? h.x + h.w * 0.5;
+            const dTrig = Math.abs(pcx - trigX);
+            if (dTrig < 88 && Math.abs(pcy - (h.y + h.h * 0.5)) < 120) {
+              const p = 1 - dTrig / 88;
+              peakPressure = Math.max(peakPressure, p * p * 0.42);
+            }
+            continue;
+          }
+          break;
+        case 'retract_spike':
+          if (h.popupExtend <= 0.05) continue;
+          radius = 112;
+          weight = 0.66;
+          break;
+        case 'spike':
+          radius = 112;
+          weight = 0.68;
+          break;
+      }
+
+      if (radius > 0 && dist < radius) {
+        const prox = 1 - dist / radius;
+        const pressure = Math.pow(prox, 1.45) * weight;
+        if (pressure > peakPressure) {
+          peakPressure = pressure;
+        }
+        // Brief pulse surge when narrowly passing a high-difficulty obstacle
+        if (isHighDifficulty && dist < 60 && this.respawnInvulnTimer <= 0) {
+          this.triggerDangerPulse(0.54);
+        }
+      }
+    }
+
+    // High-difficulty trap platforms near the player
+    for (const p of this.platforms) {
+      if (!p.revealed || !p.active) continue;
+      const closestX = Math.max(p.x, Math.min(pcx, p.x + p.w));
+      const closestY = Math.max(p.y, Math.min(pcy, p.y + p.h));
+      const dist = Math.hypot(pcx - closestX, pcy - closestY);
+      if (dist > 115) continue;
+
+      let platPressure = 0;
+      switch (p.def.kind) {
+        case 'crumble':
+          if (p.crumbleState === 'shaking') {
+            platPressure = 0.68;
+          } else if (dist < 72) {
+            platPressure = (1 - dist / 72) * 0.36;
+          }
+          break;
+        case 'fake_drop':
+          if (p.dropState === 'shaking' || p.dropState === 'dropped') {
+            platPressure = 0.78;
+          } else if (dist < 76) {
+            platPressure = (1 - dist / 76) * 0.38;
+          }
+          break;
+        case 'shrink':
+          if (p.shrinkActive) {
+            platPressure = 0.64;
+          } else if (dist < 72) {
+            platPressure = (1 - dist / 72) * 0.34;
+          }
+          break;
+        case 'phase_blink':
+          if (p.blinkWarning && dist < 110) {
+            platPressure = (1 - dist / 110) * 0.76;
+            if (dist < 48 && this.respawnInvulnTimer <= 0) {
+              this.triggerDangerPulse(0.46);
+            }
+          } else if (dist < 72) {
+            platPressure = (1 - dist / 72) * 0.34;
+          }
+          break;
+        case 'look_away':
+          if (dist < 88) {
+            platPressure = (1 - dist / 88) * 0.5;
+          }
+          break;
+        case 'proximity_shift':
+          if (p.shiftTriggered && dist < 108) {
+            platPressure = (1 - dist / 108) * 0.56;
+          }
+          break;
+        case 'follow_player':
+          if (p.def.followMode === 'evade' && dist < 96) {
+            platPressure = (1 - dist / 96) * 0.52;
+          }
+          break;
+        case 'elevator':
+          if (p.elevatorActive && dist < 88) {
+            platPressure = (1 - dist / 88) * 0.38;
+          }
+          break;
+      }
+
+      if (platPressure > peakPressure) {
+        peakPressure = platPressure;
+      }
+    }
+
+    // Subtle psychological modifiers for disorienting zones & late-game gauntlet intensity
+    if (this.inReverseControlZone) {
+      peakPressure = Math.max(peakPressure, 0.24) + 0.12;
+    }
+    const gravScale = this.dynamicGravityScale ?? this.level.gravityScale ?? 1;
+    if (gravScale < 0 && peakPressure > 0.05) {
+      peakPressure += 0.09;
+    }
+    if (this.level.windZones && peakPressure > 0.05) {
+      for (const wz of this.level.windZones) {
+        if (wz.revealOnTriggerId && !this.revealedTriggers.has(wz.revealOnTriggerId)) continue;
+        if (pcx >= wz.minX && pcx <= wz.maxX) {
+          peakPressure += 0.07;
+          break;
+        }
+      }
+    }
+    if (this.level.id >= 71 && peakPressure > 0.04) {
+      peakPressure += this.level.id >= 95 ? 0.1 : 0.05;
+    }
+
+    return Math.max(0, Math.min(1, peakPressure));
+  }
+
+  private updateDangerVignette(dt: number): void {
+    if (this.dangerPulseCooldown > 0) {
+      this.dangerPulseCooldown = Math.max(0, this.dangerPulseCooldown - dt);
+    }
+
+    if (this.state !== 'alive') {
+      this.dangerPulseBoost *= Math.exp(-dt * 5.2);
+      if (this.dangerPulseBoost < 0.004) this.dangerPulseBoost = 0;
+      this.dangerVignetteIntensity *= Math.exp(-dt * 4.8);
+      if (this.dangerVignetteIntensity < 0.004) this.dangerVignetteIntensity = 0;
+      return;
+    }
+
+    this.dangerPulseBoost *= Math.exp(-dt * 4.2);
+    if (this.dangerPulseBoost < 0.004) this.dangerPulseBoost = 0;
+
+    const proximityPressure = this.computeDangerPressure();
+    const target = Math.min(1, proximityPressure + this.dangerPulseBoost * 0.56);
+
+    const rate = target > this.dangerVignetteIntensity ? 10.5 : 3.6;
+    const blend = 1 - Math.exp(-dt * rate);
+    this.dangerVignetteIntensity += (target - this.dangerVignetteIntensity) * blend;
+    if (this.dangerVignetteIntensity < 0.004 && target === 0) {
+      this.dangerVignetteIntensity = 0;
+    }
+  }
+
+  private setFourthWallBubble(text: string | null, durationSec: number): void {
+    this.fourthWallBubble = text;
+    this.fourthWallBubbleTimer = text ? durationSec : 0;
+    this.fourthWallBubbleAge = 0;
+  }
+
+  private setExitQuip(ex: RuntimeExit, text: string, durationSec: number): void {
+    ex.quipText = text;
+    ex.quipTimer = durationSec;
+    ex.quipAge = 0;
   }
 
   private showPrankBanner(text: string, duration = 2.6): void {
@@ -2631,16 +3312,11 @@ export class PlatformerEngine {
     this.deathMessageId += 1;
     this.deathMessageTimer = deathBundle.deathMessageDurationSec;
 
-    // Save exact death position for rewarded extra-life respawn
-    // (for pit falls off the bottom of the screen, anchor right at the exact edge where the player fell)
-    const respawnX =
-      cause === 'pit'
-        ? this.lastSafeGroundedPos.x
-        : Math.max(8, Math.min(this.level.worldWidth - PLAYER_W - 8, exactX));
-    const respawnY =
-      cause === 'pit'
-        ? this.lastSafeGroundedPos.y
-        : Math.max(36, Math.min(this.level.worldHeight - PLAYER_H - 18, exactY));
+    // Compute a safe respawn spot a short distance away from the lethal obstacle
+    // (never directly over spikes, popup traps, sliding blades, or fake trapdoors).
+    const safeSpot = this.computeSafeRespawnSpot(exactX, exactY, cause);
+    const respawnX = safeSpot.x;
+    const respawnY = safeSpot.y;
 
     this.savedDeathSnapshot = {
       levelId: this.level.id,
@@ -2660,8 +3336,7 @@ export class PlatformerEngine {
       this.showPrankBanner(deathBundle.banner, deathBundle.bannerDurationSec);
     }
 
-    this.fourthWallBubble = deathBundle.bubble;
-    this.fourthWallBubbleTimer = deathBundle.bubbleDurationSec;
+    this.setFourthWallBubble(deathBundle.bubble, deathBundle.bubbleDurationSec);
     this.autonomousCommentTimer = commentaryService.getNextAmbientDelaySeconds(
       this.level.id,
       this.levelDeaths,
@@ -2850,7 +3525,7 @@ export class PlatformerEngine {
     // High-intensity darkness radial gradient mask (delegated to GameCanvas renderer when provided)
     if (this.level.spotlightRadius) {
       const tightRadius = this.getHighIntensityViewRadius();
-      const proximityRevealRadius = tightRadius * 1.24;
+      const proximityRevealRadius = tightRadius * (this.darknessLightBoost ? 1.85 : this.level.id <= 35 ? 1.52 : 1.36);
       const darknessFrame: DarknessRenderFrame = {
         levelId: this.level.id,
         playerScreenX: this.px + PLAYER_W / 2 - Math.round(this.camX) + shakeX,
@@ -2863,6 +3538,7 @@ export class PlatformerEngine {
         flashAlpha: this.darknessFlashAlpha,
         nearestHazardDistance: this.computeNearestHazardDistance(),
         proximityRevealRadius,
+        lightBoostActive: this.darknessLightBoost,
       };
       if (this.callbacks.onRenderDarknessMask) {
         this.callbacks.onRenderDarknessMask(ctx, darknessFrame);
@@ -2902,6 +3578,25 @@ export class PlatformerEngine {
     }
 
     ctx.restore();
+
+    // Dynamic full-screen-edge danger vignette (delegated to GameCanvas renderer for 60fps zero-react-overhead polish)
+    if (
+      this.callbacks.onRenderDangerVignette &&
+      (this.dangerVignetteIntensity > 0.012 || this.dangerPulseBoost > 0.012)
+    ) {
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      this.callbacks.onRenderDangerVignette(ctx, {
+        width: targetW,
+        height: targetH,
+        intensity: this.dangerVignetteIntensity,
+        pulseBoost: this.dangerPulseBoost,
+        worldTime: this.worldTime,
+        isDarkLevel,
+        prefersReducedMotion: this.prefersReducedMotion,
+      });
+      ctx.restore();
+    }
   }
 
   private drawWindZones(ctx: CanvasRenderingContext2D): void {
@@ -2935,18 +3630,26 @@ export class PlatformerEngine {
   }
 
   /**
-   * Computes an extremely tight player view radius for high-intensity darkness levels.
-   * Escalates tighter on later levels (68px–84px core vision).
+   * Computes a balanced player view radius for darkness levels:
+   * - Early dark levels (<= 35) stay generous enough that upcoming obstacles ahead are clear.
+   * - Mid (36..65) and late (66..100) dark levels tighten progressively while preserving forward readability.
    */
   private getHighIntensityViewRadius(): number {
     const raw = this.level.spotlightRadius ?? 116;
-    return Math.max(68, Math.min(84, Math.round(raw * 0.68)));
+    if (this.level.id <= 35) {
+      return Math.max(118, Math.min(138, Math.round(raw * 1.06)));
+    }
+    if (this.level.id <= 65) {
+      return Math.max(96, Math.min(114, Math.round(raw * 0.96)));
+    }
+    return Math.max(84, Math.min(98, Math.round(raw * 0.92)));
   }
 
   /**
-   * Returns 0..1 visibility alpha for an unexpected obstacle in high-intensity darkness levels.
-   * Obstacles remain completely hidden (0) beyond close proximity and materialize suddenly
-   * as the player approaches within the tight view radius.
+   * Returns 0..1 visibility alpha for an obstacle in darkness levels.
+   * Probes both around the player AND forward in the player's facing direction so
+   * obstacles directly ahead come into clear view before impact (expanded further
+   * when the rewarded forward-light boost is active).
    */
   private getObstacleProximityAlpha(
     x: number,
@@ -2956,19 +3659,36 @@ export class PlatformerEngine {
     radiusScale = 1,
   ): number {
     if (!this.level.spotlightRadius) return 1;
-    const revealRadius = this.getHighIntensityViewRadius() * 1.24 * radiusScale;
+    const isEarlyDark = this.level.id <= 35;
+    const baseRadius = this.getHighIntensityViewRadius();
+    const forwardReach = this.darknessLightBoost ? 104 : isEarlyDark ? 62 : 44;
+    const revealRadius =
+      baseRadius *
+      (this.darknessLightBoost ? 1.88 : isEarlyDark ? 1.54 : 1.38) *
+      radiusScale;
+
     const pcx = this.px + PLAYER_W * 0.5;
     const pcy = this.py + PLAYER_H * 0.5;
-    const closestX = Math.max(x, Math.min(pcx, x + w));
-    const closestY = Math.max(y, Math.min(pcy, y + h));
-    const dx = pcx - closestX;
-    const dy = pcy - closestY;
-    const distSq = dx * dx + dy * dy;
+    const fcx = pcx + this.facing * forwardReach;
+
+    // Distance to player center
+    const closestPX = Math.max(x, Math.min(pcx, x + w));
+    const closestPY = Math.max(y, Math.min(pcy, y + h));
+    const distPlayerSq = (pcx - closestPX) ** 2 + (pcy - closestPY) ** 2;
+
+    // Distance to forward sightline probe (stretched slightly horizontally along facing direction)
+    const closestFX = Math.max(x, Math.min(fcx, x + w));
+    const closestFY = Math.max(y, Math.min(pcy, y + h));
+    const fdx = (fcx - closestFX) * (this.darknessLightBoost ? 0.78 : 0.88);
+    const fdy = pcy - closestFY;
+    const distForwardSq = fdx * fdx + fdy * fdy;
+
+    const distSq = Math.min(distPlayerSq, distForwardSq);
     if (distSq >= revealRadius * revealRadius) {
       return 0;
     }
     const dist = Math.sqrt(distSq);
-    const fullRevealRadius = revealRadius * 0.56;
+    const fullRevealRadius = revealRadius * (this.darknessLightBoost ? 0.7 : 0.62);
     if (dist <= fullRevealRadius) return 1;
     const t = 1 - (dist - fullRevealRadius) / Math.max(1, revealRadius - fullRevealRadius);
     return t * t;
@@ -2997,15 +3717,16 @@ export class PlatformerEngine {
   }
 
   private drawSpotlightOverlay(ctx: CanvasRenderingContext2D, radius: number): void {
-    const sx = this.px + PLAYER_W / 2 - Math.round(this.camX) + this.facing * 8;
+    const forwardShift = this.darknessLightBoost ? 78 : this.level.id <= 35 ? 42 : 30;
+    const effRadius = this.darknessLightBoost ? radius * 1.55 : radius;
+    const sx = this.px + PLAYER_W / 2 - Math.round(this.camX) + this.facing * forwardShift;
     const sy = this.py + PLAYER_H / 2 - 4;
 
-    const grad = ctx.createRadialGradient(sx, sy, radius * 0.16, sx, sy, radius * 1.05);
-    grad.addColorStop(0, 'rgba(2, 2, 4, 0.02)');
-    grad.addColorStop(0.35, 'rgba(2, 2, 4, 0.34)');
-    grad.addColorStop(0.66, 'rgba(2, 2, 4, 0.84)');
-    grad.addColorStop(0.88, 'rgba(1, 1, 3, 0.975)');
-    grad.addColorStop(1, 'rgba(1, 1, 3, 0.996)');
+    const grad = ctx.createRadialGradient(sx, sy, effRadius * 0.34, sx, sy, effRadius * 1.15);
+    grad.addColorStop(0, 'rgba(2, 2, 4, 0.00)');
+    grad.addColorStop(0.45, this.darknessLightBoost ? 'rgba(2, 2, 4, 0.16)' : 'rgba(2, 2, 4, 0.28)');
+    grad.addColorStop(0.74, this.darknessLightBoost ? 'rgba(2, 2, 4, 0.64)' : 'rgba(2, 2, 4, 0.78)');
+    grad.addColorStop(1, this.darknessLightBoost ? 'rgba(1, 1, 3, 0.935)' : 'rgba(1, 1, 3, 0.975)');
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, VIEW_WIDTH, VIEW_HEIGHT);
   }
@@ -3677,7 +4398,7 @@ export class PlatformerEngine {
 
       // Cheeky speech bubble when moving exit scoots
       if (ex.quipText) {
-        this.drawSpeechBubble(ctx, ex.x, dy - 22, ex.quipText);
+        this.drawSpeechBubble(ctx, ex.x, dy - 22, ex.quipText, false, ex.quipAge);
       }
 
       ctx.restore();
@@ -4110,7 +4831,14 @@ export class PlatformerEngine {
 
     // Fourth-wall insult speech bubble above stickman
     if (this.fourthWallBubble) {
-      this.drawSpeechBubble(ctx, cx, this.py - 16, this.fourthWallBubble, true);
+      this.drawSpeechBubble(
+        ctx,
+        cx,
+        this.py - 16,
+        this.fourthWallBubble,
+        true,
+        this.fourthWallBubbleAge,
+      );
     }
   }
 
@@ -4120,6 +4848,7 @@ export class PlatformerEngine {
     y: number,
     text: string,
     isInsult = false,
+    ageSec = 1,
   ): void {
     const tier = getCrueltyTier(this.level.id);
     const isCruelDarkBubble = isInsult && tier >= 4;
@@ -4132,6 +4861,72 @@ export class PlatformerEngine {
     const clampedX = Math.max(this.camX + w / 2 + 12, Math.min(this.camX + VIEW_WIDTH - w / 2 - 12, x));
     const bx = clampedX - w / 2;
     const by = Math.max(64, y - h);
+    const tailX = Math.max(bx + 10, Math.min(bx + w - 10, x));
+
+    // Subtle attention-grabbing pulse + damped mocking shake upon appearance
+    let scale = 1;
+    let shakeX = 0;
+    let shakeY = 0;
+    let tiltRad = 0;
+    let pulseRingAlpha = 0;
+    let pulseRingExpand = 0;
+
+    if (!this.prefersReducedMotion && ageSec >= 0 && ageSec < 0.65) {
+      const popDuration = 0.24;
+      if (ageSec < popDuration) {
+        const p = ageSec / popDuration;
+        // Crisp elastic overshoot (0.86 -> 1.075 -> 1.0)
+        scale = 0.86 + 0.14 * p + Math.sin(p * Math.PI) * 0.085;
+      } else {
+        // Gentle secondary attention pulse (0.24s..0.60s)
+        const p2 = Math.min(1, (ageSec - popDuration) / 0.36);
+        scale = 1 + Math.sin(p2 * Math.PI) * (isInsult ? 0.042 : 0.028);
+      }
+
+      // Damped horizontal micro-shake + slight sarcastic tilt during first 0.48s
+      const shakeWindow = 0.48;
+      if (ageSec < shakeWindow) {
+        const decay = Math.pow(1 - ageSec / shakeWindow, 1.65);
+        const amp = isInsult ? 2.8 : 1.9;
+        shakeX = Math.sin(ageSec * 44) * amp * decay;
+        shakeY = Math.cos(ageSec * 30) * (amp * 0.28) * decay;
+        tiltRad = Math.sin(ageSec * 36) * (isInsult ? 0.028 : 0.018) * decay;
+      }
+
+      // Subtle expanding crimson highlight pulse on insult bubble entrance
+      const ringWindow = 0.46;
+      if (isInsult && ageSec < ringWindow) {
+        const rp = ageSec / ringWindow;
+        pulseRingAlpha = (1 - rp) * 0.48;
+        pulseRingExpand = rp * 6.5;
+      }
+    }
+
+    // Pivot cleanly around the speech tail anchor so the bubble pulses/shakes from the stickman
+    const pivotX = tailX;
+    const pivotY = by + h;
+    if (scale !== 1 || shakeX !== 0 || shakeY !== 0 || tiltRad !== 0) {
+      ctx.translate(pivotX + shakeX, pivotY + shakeY);
+      if (tiltRad !== 0) ctx.rotate(tiltRad);
+      if (scale !== 1) ctx.scale(scale, scale);
+      ctx.translate(-pivotX, -pivotY);
+    }
+
+    if (pulseRingAlpha > 0.01) {
+      ctx.save();
+      ctx.strokeStyle = `rgba(220, 38, 38, ${pulseRingAlpha.toFixed(3)})`;
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      ctx.roundRect(
+        bx - pulseRingExpand,
+        by - pulseRingExpand * 0.7,
+        w + pulseRingExpand * 2,
+        h + pulseRingExpand * 1.4,
+        7 + pulseRingExpand * 0.45,
+      );
+      ctx.stroke();
+      ctx.restore();
+    }
 
     // Offset comic ink shadow (intensifies with cruelty tier)
     ctx.fillStyle = isCruelDarkBubble
@@ -4152,7 +4947,6 @@ export class PlatformerEngine {
     ctx.stroke();
 
     // Pointer tail aimed toward stickman
-    const tailX = Math.max(bx + 10, Math.min(bx + w - 10, x));
     ctx.beginPath();
     ctx.moveTo(tailX - 5, by + h - 1);
     ctx.lineTo(tailX, by + h + 6);

@@ -110,6 +110,7 @@ function DevTestAdDialog({ session }: { session: DevTestAdSession }) {
 
   const isRewarded = session.format === 'rewarded';
   const isHintReward = isRewarded && session.purpose === 'hint';
+  const isDarknessLightReward = isRewarded && session.purpose === 'darkness_light';
 
   return (
     <div
@@ -125,11 +126,13 @@ function DevTestAdDialog({ session }: { session: DevTestAdSession }) {
               GOOGLE TEST AD
             </span>
             <span className="text-xs font-mono-tabular text-[#D6D1C7] uppercase">
-              {isHintReward
-                ? 'Rewarded Video · Hint'
-                : isRewarded
-                  ? 'Rewarded Video'
-                  : 'Interstitial'}
+              {isDarknessLightReward
+                ? 'Rewarded Video · Light Boost'
+                : isHintReward
+                  ? 'Rewarded Video · Hint'
+                  : isRewarded
+                    ? 'Rewarded Video'
+                    : 'Interstitial'}
             </span>
           </div>
 
@@ -160,7 +163,11 @@ function DevTestAdDialog({ session }: { session: DevTestAdSession }) {
               {completed ? (
                 <>
                   <CheckCircle2 className="w-3.5 h-3.5" />
-                  {isHintReward ? 'Unlock Cryptic Hint' : 'Claim +1 Extra Life'}
+                  {isDarknessLightReward
+                    ? 'Illuminate Ahead'
+                    : isHintReward
+                      ? 'Unlock Cryptic Hint'
+                      : 'Claim +1 Extra Life'}
                 </>
               ) : (
                 <>
@@ -176,20 +183,24 @@ function DevTestAdDialog({ session }: { session: DevTestAdSession }) {
           <div className="font-display font-extrabold text-xl tracking-tight">
             {isRewarded
               ? completed
-                ? isHintReward
-                  ? 'Reward Earned: Cryptic Hint Unlocked'
-                  : 'Reward Earned: +1 Extra Life'
+                ? isDarknessLightReward
+                  ? 'Reward Earned: Forward Light Boosted'
+                  : isHintReward
+                    ? 'Reward Earned: Cryptic Hint Unlocked'
+                    : 'Reward Earned: +1 Extra Life'
                 : `Watching Rewarded Test Ad (${secondsLeft}s)...`
               : completed
                 ? 'Level Transition Interstitial Complete'
                 : `Interstitial Test Ad (${secondsLeft}s)...`}
           </div>
           <p className="text-xs text-[#D6D1C7] max-w-md mx-auto leading-relaxed">
-            {isHintReward
-              ? 'Verifies Google AdMob rewarded callback gating: skipping early reveals nothing; completing unlocks this obstacle’s cryptic clue.'
-              : isRewarded
-                ? 'Verifies Google AdMob rewarded callback gating: skipping early grants 0 lives; completing grants exactly 1 extra life.'
-                : 'Shown naturally after completing a level and before starting the next level.'}
+            {isDarknessLightReward
+              ? 'Verifies Google AdMob rewarded callback gating: skipping early keeps full darkness; completing casts a forward light beam across obstacles ahead while darkness remains around you.'
+              : isHintReward
+                ? 'Verifies Google AdMob rewarded callback gating: skipping early reveals nothing; completing unlocks this obstacle’s cryptic clue.'
+                : isRewarded
+                  ? 'Verifies Google AdMob rewarded callback gating: skipping early grants 0 lives; completing grants exactly 1 extra life.'
+                  : 'Shown naturally after every 3 completed levels during level transitions.'}
           </p>
 
           <div className="mt-3 p-3 rounded-lg bg-[#111111] border border-[#F5F3EE]/12 text-left font-mono-tabular text-[10px] text-[#D6D1C7] space-y-1">
@@ -207,9 +218,11 @@ function DevTestAdDialog({ session }: { session: DevTestAdSession }) {
             <div className="inline-flex items-center gap-1.5 text-[11px] text-[#F59E0B] pt-1">
               <ShieldAlert className="w-3.5 h-3.5" />
               <span>
-                {isHintReward
-                  ? 'Closing now skips the ad and reveals NO hint.'
-                  : 'Closing now skips the ad and awards NO extra life.'}
+                {isDarknessLightReward
+                  ? 'Closing now skips the ad and keeps the darkness unchanged.'
+                  : isHintReward
+                    ? 'Closing now skips the ad and reveals NO hint.'
+                    : 'Closing now skips the ad and awards NO extra life.'}
               </span>
             </div>
           )}

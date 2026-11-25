@@ -121,7 +121,7 @@ export function DeathScreenModal({
                 >
                   <span className="inline-flex items-center gap-2 font-display font-extrabold text-xs sm:text-sm tracking-tight">
                     <Play className="w-4 h-4 fill-current shrink-0" />
-                    RESPAWN AT DEATH SPOT
+                    RESPAWN NEARBY (SAFE)
                   </span>
                   <span className="text-[10px] sm:text-[11px] font-mono-tabular font-bold bg-[#111111]/25 px-2 py-0.5 rounded">
                     USE 1 LIFE ({extraLives})
@@ -165,7 +165,7 @@ export function DeathScreenModal({
               </button>
 
               <p className="text-[10px] sm:text-[11px] text-[#57534E] leading-snug">
-                Respawns right where you died on <span className="font-semibold text-[#111111]">{levelName}</span>. Watch up to 3 ads separately (+1 life each), or decline and restart.
+                Respawns safely just before the obstacle on <span className="font-semibold text-[#111111]">{levelName}</span>. Watch up to 3 ads separately (+1 life each), or decline and restart.
               </p>
 
               {adStatusMessage && (

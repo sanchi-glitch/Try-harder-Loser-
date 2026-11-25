@@ -9,7 +9,6 @@ import {
   Play,
   RotateCcw,
   Settings,
-  Trophy,
   Volume2,
   VolumeX,
   X,
@@ -20,7 +19,6 @@ import { audioManager } from '../engine/audio';
 import type { SaveData } from '../types/game';
 import { HomeBannerAdSlot } from './AdMobOverlays';
 import { PWAInstallButton } from './PWAInstallButton';
-import { WorldRankIndicator } from './WorldRankIndicator';
 
 interface TitleScreenProps {
   save: SaveData;
@@ -31,7 +29,6 @@ interface TitleScreenProps {
   onOpenSettings: () => void;
   onOpenStats: () => void;
   onOpenAchievements: () => void;
-  onOpenLeaderboards: () => void;
   onToggleMute: () => void;
 }
 
@@ -44,7 +41,6 @@ export function TitleScreen({
   onOpenSettings,
   onOpenStats,
   onOpenAchievements,
-  onOpenLeaderboards,
   onToggleMute,
 }: TitleScreenProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -480,12 +476,9 @@ export function TitleScreen({
             />
           </svg>
 
-          <p className="text-[11px] sm:text-sm text-[#44403C] font-medium mb-1.5 sm:mb-2.5 max-w-xl text-balance">
+          <p className="text-[11px] sm:text-sm text-[#44403C] font-medium mb-2.5 sm:mb-4 max-w-xl text-balance">
             100 levels. Zero mercy. Don&apos;t blame the game. You&apos;re just bad.
           </p>
-
-          {/* Live World Rank Indicator: Global Finishers vs. User */}
-          <WorldRankIndicator save={save} onOpenLeaderboards={onOpenLeaderboards} />
 
           {/* Primary Single-Row Horizontal Action Strip: Play, Levels, Game Options */}
           <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-3 mb-2 sm:mb-3.5">
@@ -560,21 +553,6 @@ export function TitleScreen({
 
           {/* Quiet direct horizontal secondary row */}
           <div className="flex flex-wrap items-center justify-center gap-x-4 sm:gap-x-5 gap-y-0.5 text-[11px] sm:text-sm font-semibold text-[#111111]">
-            <button
-              type="button"
-              onClick={() => {
-                audioManager.unlockAudio();
-                audioManager.playButtonClick();
-                onOpenLeaderboards();
-              }}
-              className="inline-flex items-center gap-1.5 py-1 hover:text-[#DC2626] transition-colors cursor-pointer whitespace-nowrap"
-            >
-              <Trophy className="w-3.5 h-3.5 text-[#DC2626]" />
-              Leaderboards
-            </button>
-            <span className="text-[#111111]/25" aria-hidden="true">
-              ·
-            </span>
             <button
               type="button"
               onClick={() => {
@@ -698,19 +676,6 @@ export function TitleScreen({
                   >
                     <Play className="w-4 h-4 fill-current" />
                     {hasProgress ? `Continue Lv ${String(currentLevel.id).padStart(2, '0')}` : 'Start Level 01'}
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      audioManager.playButtonClick();
-                      setMenuDrawerOpen(false);
-                      onOpenLeaderboards();
-                    }}
-                    className="w-full inline-flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-lg border border-[#DC2626]/50 bg-[#FFFFFF] text-[11px] font-bold text-[#111111] hover:border-[#DC2626] hover:text-[#DC2626] cursor-pointer"
-                  >
-                    <Trophy className="w-3.5 h-3.5 text-[#DC2626]" />
-                    Global Leaderboards
                   </button>
 
                   <button

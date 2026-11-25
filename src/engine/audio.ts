@@ -472,6 +472,7 @@ class AudioManager {
 
   private lastStrongVibrateAt = 0;
   private lastTouchHapticAt = 0;
+  private lastMockSighAt = 0;
 
   public vibrate(pattern: number | number[]): void {
     if (!this.settings.vibration) return;
@@ -651,6 +652,203 @@ class AudioManager {
     noise.connect(nGain);
     nGain.connect(ctx.destination);
     noise.start(now);
+
+    // Randomly follow death impact with a subtle, mocking sigh or disappointed groan
+    const nowMs = performance.now();
+    const sighCooldownMs = 1750;
+    const mockChance = this.currentDeathStreak >= 3 ? 0.58 : 0.45;
+    if (nowMs - this.lastMockSighAt >= sighCooldownMs && Math.random() < mockChance) {
+      this.lastMockSighAt = nowMs;
+      const delaySec = 0.19 + Math.random() * 0.06;
+      this.playMockingSighOrGroan(undefined, delaySec);
+    }
+  }
+
+  /**
+   * Synthesizes a subtle, mocking exhaled sigh or disappointed groan using
+   * dual vocal-formant filters and gentle breath/pitch modulation.
+   */
+  public playMockingSighOrGroan(variant?: 'sigh' | 'groan', delaySec = 0): void {
+    const g = this.sfxGain();
+    if (g <= 0.01) return;
+    const ctx = this.ensureContext();
+    if (!ctx) return;
+
+    const chosen: 'sigh' | 'groan' = variant ?? (Math.random() < 0.54 ? 'sigh' : 'groan');
+    const start = ctx.currentTime + Math.max(0, delaySec);
+    // Subtle random pitch & duration variation so repeated mockery feels organic
+    const pitchJitter = 0.93 + Math.random() * 0.14;
+
+    if (chosen === 'sigh') {
+      const dur = 0.58 + Math.random() * 0.14;
+      const master = ctx.createGain();
+      master.gain.setValueAtTime(0.0001, start);
+      master.gain.linearRampToValueAtTime(g * 0.15, start + 0.11);
+      master.gain.exponentialRampToValueAtTime(g * 0.085, start + dur * 0.52);
+      master.gain.exponentialRampToValueAtTime(0.0001, start + dur);
+      master.connect(ctx.destination);
+
+      // Soft breathy exhale noise shaped by descending "haaaah" vocal formants
+      const sampleCount = Math.max(1, Math.floor(ctx.sampleRate * dur));
+      const breathBuffer = ctx.createBuffer(1, sampleCount, ctx.sampleRate);
+      const breathData = breathBuffer.getChannelData(0);
+      let prev = 0;
+      for (let i = 0; i < sampleCount; i++) {
+        const white = Math.random() * 2 - 1;
+        // One-pole softened pink-ish air texture
+        prev = prev * 0.62 + white * 0.38;
+        breathData[i] = prev;
+      }
+
+      const breathSrc = ctx.createBufferSource();
+      breathSrc.buffer = breathBuffer;
+
+      const f1 = ctx.createBiquadFilter();
+      f1.type = 'bandpass';
+      f1.frequency.setValueAtTime(760 * pitchJitter, start);
+      f1.frequency.exponentialRampToValueAtTime(390 * pitchJitter, start + dur);
+      f1.Q.setValueAtTime(3.0, start);
+
+      const f2 = ctx.createBiquadFilter();
+      f2.type = 'bandpass';
+      f2.frequency.setValueAtTime(1580 * pitchJitter, start);
+      f2.frequency.exponentialRampToValueAtTime(920 * pitchJitter, start + dur);
+      f2.Q.setValueAtTime(4.2, start);
+
+      const f1Gain = ctx.createGain();
+      f1Gain.gain.setValueAtTime(0.85, start);
+      const f2Gain = ctx.createGain();
+      f2Gain.gain.setValueAtTime(0.42, start);
+
+      breathSrc.connect(f1);
+      breathSrc.connect(f2);
+      f1.connect(f1Gain);
+      f2.connect(f2Gain);
+      f1Gain.connect(master);
+      f2Gain.connect(master);
+
+      // Faint voiced downward whisper undertone for weary human inflection
+      const voiceOsc = ctx.createOscillator();
+      voiceOsc.type = 'triangle';
+      voiceOsc.frequency.setValueAtTime(242 * pitchJitter, start);
+      voiceOsc.frequency.exponentialRampToValueAtTime(158 * pitchJitter, start + dur * 0.92);
+
+      const voiceLp = ctx.createBiquadFilter();
+      voiceLp.type = 'lowpass';
+      voiceLp.frequency.setValueAtTime(620, start);
+
+      const voiceGain = ctx.createGain();
+      voiceGain.gain.setValueAtTime(0.0001, start);
+      voiceGain.gain.linearRampToValueAtTime(0.28, start + 0.09);
+      voiceGain.gain.exponentialRampToValueAtTime(0.0001, start + dur * 0.94);
+
+      voiceOsc.connect(voiceLp);
+      voiceLp.connect(voiceGain);
+      voiceGain.connect(master);
+
+      breathSrc.start(start);
+      breathSrc.stop(start + dur + 0.02);
+      voiceOsc.start(start);
+      voiceOsc.stop(start + dur + 0.02);
+      return;
+    }
+
+    // Variant B: Subtle disappointed low groan ("ugghhh...")
+    const dur = 0.5 + Math.random() * 0.14;
+    const master = ctx.createGain();
+    master.gain.setValueAtTime(0.0001, start);
+    master.gain.linearRampToValueAtTime(g * 0.16, start + 0.065);
+    master.gain.exponentialRampToValueAtTime(g * 0.11, start + dur * 0.56);
+    master.gain.exponentialRampToValueAtTime(0.0001, start + dur);
+    master.connect(ctx.destination);
+
+    // Warm vocal-cord sawtooth + triangle pair with lazy downward droop
+    const osc1 = ctx.createOscillator();
+    osc1.type = 'sawtooth';
+    osc1.frequency.setValueAtTime(164 * pitchJitter, start);
+    osc1.frequency.exponentialRampToValueAtTime(104 * pitchJitter, start + dur);
+
+    const osc2 = ctx.createOscillator();
+    osc2.type = 'triangle';
+    osc2.frequency.setValueAtTime(165.8 * pitchJitter, start);
+    osc2.frequency.exponentialRampToValueAtTime(102.5 * pitchJitter, start + dur);
+
+    // Subtle exasperated vibrato wobble
+    const vibOsc = ctx.createOscillator();
+    const vibGain = ctx.createGain();
+    vibOsc.type = 'sine';
+    vibOsc.frequency.setValueAtTime(5.8, start);
+    vibGain.gain.setValueAtTime(9, start);
+    vibOsc.connect(vibGain);
+    vibGain.connect(osc1.detune);
+    vibGain.connect(osc2.detune);
+
+    // "Uh" vocal formants for unmistakably disappointed groan timbre
+    const formant1 = ctx.createBiquadFilter();
+    formant1.type = 'bandpass';
+    formant1.frequency.setValueAtTime(510 * pitchJitter, start);
+    formant1.frequency.exponentialRampToValueAtTime(340 * pitchJitter, start + dur);
+    formant1.Q.setValueAtTime(4.2, start);
+
+    const formant2 = ctx.createBiquadFilter();
+    formant2.type = 'bandpass';
+    formant2.frequency.setValueAtTime(1140 * pitchJitter, start);
+    formant2.frequency.exponentialRampToValueAtTime(840 * pitchJitter, start + dur);
+    formant2.Q.setValueAtTime(4.8, start);
+
+    const warmthLp = ctx.createBiquadFilter();
+    warmthLp.type = 'lowpass';
+    warmthLp.frequency.setValueAtTime(1250, start);
+
+    const f1Gain = ctx.createGain();
+    f1Gain.gain.setValueAtTime(0.9, start);
+    const f2Gain = ctx.createGain();
+    f2Gain.gain.setValueAtTime(0.32, start);
+
+    const osc1Gain = ctx.createGain();
+    osc1Gain.gain.setValueAtTime(0.52, start);
+    const osc2Gain = ctx.createGain();
+    osc2Gain.gain.setValueAtTime(0.48, start);
+
+    osc1.connect(osc1Gain);
+    osc2.connect(osc2Gain);
+    osc1Gain.connect(formant1);
+    osc1Gain.connect(formant2);
+    osc2Gain.connect(formant1);
+    osc2Gain.connect(formant2);
+    formant1.connect(f1Gain);
+    formant2.connect(f2Gain);
+    f1Gain.connect(warmthLp);
+    f2Gain.connect(warmthLp);
+    warmthLp.connect(master);
+
+    // Subtle breath air layered behind the groan
+    const sampleCount = Math.max(1, Math.floor(ctx.sampleRate * dur));
+    const airBuffer = ctx.createBuffer(1, sampleCount, ctx.sampleRate);
+    const airData = airBuffer.getChannelData(0);
+    for (let i = 0; i < sampleCount; i++) {
+      airData[i] = (Math.random() * 2 - 1) * 0.4;
+    }
+    const airSrc = ctx.createBufferSource();
+    airSrc.buffer = airBuffer;
+    const airFilter = ctx.createBiquadFilter();
+    airFilter.type = 'bandpass';
+    airFilter.frequency.setValueAtTime(900 * pitchJitter, start);
+    airFilter.Q.setValueAtTime(2.6, start);
+    const airGain = ctx.createGain();
+    airGain.gain.setValueAtTime(0.24, start);
+    airSrc.connect(airFilter);
+    airFilter.connect(airGain);
+    airGain.connect(master);
+
+    osc1.start(start);
+    osc2.start(start);
+    vibOsc.start(start);
+    airSrc.start(start);
+    osc1.stop(start + dur + 0.02);
+    osc2.stop(start + dur + 0.02);
+    vibOsc.stop(start + dur + 0.02);
+    airSrc.stop(start + dur + 0.02);
   }
 
   public playCheckpoint(): void {

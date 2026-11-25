@@ -32,6 +32,7 @@ export type CommentaryTrigger =
   | 'mid_run'
   | 'late_run'
   | 'ambient'
+  | 'random_interjection'
   | 'victory';
 
 export interface LevelRangeInsultCategory {
@@ -432,6 +433,7 @@ const CATEGORY_COOLDOWN_MS: Record<CommentaryTrigger, number> = {
   mid_run: 6500,
   late_run: 6000,
   ambient: 10500,
+  random_interjection: 14000,
   victory: 0,
 };
 
@@ -451,12 +453,54 @@ const GLOBAL_COOLDOWN_MS: Record<CommentaryTrigger, number> = {
   mid_run: 5800,
   late_run: 5500,
   ambient: 6500,
+  random_interjection: 5200,
   victory: 3000,
 };
 
 const RECENT_HISTORY_LIMIT = 16;
 /** Per-line cooldown (ms) preventing the same insult from reappearing too soon. */
 const LINE_REPEAT_COOLDOWN_MS = 45000;
+
+/** Random interjection timer settings for long, unbroken stretches of gameplay. */
+export const RANDOM_INTERJECTION_MIN_UNBROKEN_SECONDS = 18;
+export const RANDOM_INTERJECTION_INITIAL_JITTER_SECONDS = 10;
+export const RANDOM_INTERJECTION_MIN_INTERVAL_SECONDS = 14;
+export const RANDOM_INTERJECTION_MAX_INTERVAL_SECONDS = 26;
+
+/**
+ * Sarcastic, non-level-specific interjections triggered when the player goes
+ * on a long, unbroken stretch of gameplay without dying or resetting.
+ */
+export const RANDOM_INTERJECTION_INSULTS: readonly string[] = [
+  'Still alive? Don’t worry, you’ll find a dumb way to mess this up.',
+  'Wow, a whole stretch without dying. Should I call the news?',
+  'Your palms are getting sweaty. I can literally feel it from inside the screen.',
+  'Are you leaning closer to the screen? That never actually helps.',
+  'I love how confident you look right before a catastrophic choke.',
+  'Keep holding your breath. Blinking is how amateurs lose.',
+  'Honestly, I’m shocked you haven’t tripped over your own shoelaces yet.',
+  'Enjoying this little peace and quiet? It’s deeply temporary.',
+  'You’ve been alive suspiciously long. Did someone else grab the controls?',
+  'Careful — your ego is inflating faster than your reaction speed.',
+  'Still going? Bold strategy: surviving on pure panic and luck.',
+  'Just checking in to remind you that one sloppy tap erases all of this.',
+  'Look at you concentrating like this is brain surgery.',
+  'Not a single fail in a while? That just means the next one will hurt twice as much.',
+  'Your posture right now is terrible, by the way.',
+  'Don’t let this streak fool you — mediocrity always catches up.',
+  'You’re overdue for an embarrassing mistake. Take your time.',
+  'I’m only staying quiet so I can laugh louder when you finally slip.',
+  'Smooth movement… right up until your thumbs forget how buttons work.',
+  'Imagine focusing this hard and still eventually losing.',
+  'Is that skill, or are you just aggressively guessing and getting lucky?',
+  'Hey, remember to unclench your jaw. You look ridiculous.',
+  'Every extra second you survive just raises the comedic value of your next fail.',
+  'Still upright? Even a broken clock gets lucky twice a day.',
+  'You know you’re going to overthink the next jump now that I said that.',
+  'Wow, unbroken gameplay. Truly inspiring — right up until the plot twist.',
+  'Keep staring intently. The pixels definitely care.',
+  'I’d applaud your focus, but my stick arms don’t deserve the strain.',
+];
 
 // Performance-aware cruel pools that layer on top of level-range dialogue
 const FLAWLESS_RUN_MOCKERY: readonly string[] = [
@@ -581,9 +625,89 @@ export class CommentaryService {
   private currentLevelId = 1;
   private restartsOnCurrentLevel = 0;
 
+  // Random interjection timer state for long, unbroken stretches of gameplay
+  private unbrokenGameplaySeconds = 0;
+  private randomInterjectionCountdownSec = this.rollInitialInterjectionDelay();
+  private interjectionsFiredInStretch = 0;
+
   /** Returns the level-range insult category (1–100) for the given level. */
   public getLevelRangeCategory(levelId: number): LevelRangeInsultCategory {
     return getLevelRangeInsultCategory(levelId);
+  }
+
+  /**
+   * Resets the unbroken gameplay timer and schedules the next random interjection.
+   * Called automatically on death, level load, or restart.
+   */
+  public resetUnbrokenStretch(): void {
+    this.unbrokenGameplaySeconds = 0;
+    this.interjectionsFiredInStretch = 0;
+    this.randomInterjectionCountdownSec = this.rollInitialInterjectionDelay();
+  }
+
+  /** Returns how many continuous seconds the player has survived in the current unbroken stretch. */
+  public getUnbrokenGameplaySeconds(): number {
+    return this.unbrokenGameplaySeconds;
+  }
+
+  /** Returns remaining seconds until the next random interjection check. */
+  public getRandomInterjectionCountdownSeconds(): number {
+    return Math.max(0, this.randomInterjectionCountdownSec);
+  }
+
+  /**
+   * Advances the random interjection timer during active, unbroken gameplay.
+   * Once the player survives a long unbroken stretch without dying/resetting,
+   * fires a sarcastic, non-level-specific insult and rolls the next random interval.
+   */
+  public tickRandomInterjection(
+    dtSec: number,
+    ctx: CommentaryContext,
+    canDisplay = true,
+  ): CommentaryRemark | null {
+    if (!Number.isFinite(dtSec) || dtSec <= 0) return null;
+
+    this.unbrokenGameplaySeconds += dtSec;
+    this.randomInterjectionCountdownSec -= dtSec;
+
+    if (
+      this.unbrokenGameplaySeconds < RANDOM_INTERJECTION_MIN_UNBROKEN_SECONDS ||
+      this.randomInterjectionCountdownSec > 0
+    ) {
+      return null;
+    }
+
+    if (!canDisplay) {
+      // Wait briefly until any active speech bubble clears without losing the unbroken stretch
+      this.randomInterjectionCountdownSec = 1.2;
+      return null;
+    }
+
+    const remark = this.requestRemark('random_interjection', ctx);
+    if (remark) {
+      this.interjectionsFiredInStretch += 1;
+      this.randomInterjectionCountdownSec = this.rollRecurringInterjectionDelay();
+      return remark;
+    }
+
+    // Global or category cooldown was active: retry shortly once screen settles
+    this.randomInterjectionCountdownSec = 2.5 + Math.random() * 2.0;
+    return null;
+  }
+
+  private rollInitialInterjectionDelay(): number {
+    return (
+      RANDOM_INTERJECTION_MIN_UNBROKEN_SECONDS +
+      Math.random() * RANDOM_INTERJECTION_INITIAL_JITTER_SECONDS
+    );
+  }
+
+  private rollRecurringInterjectionDelay(): number {
+    const span =
+      RANDOM_INTERJECTION_MAX_INTERVAL_SECONDS - RANDOM_INTERJECTION_MIN_INTERVAL_SECONDS;
+    // Slight pacing variety as a single unbroken stretch drags on
+    const stretchBonus = Math.min(3, this.interjectionsFiredInStretch * 0.75);
+    return RANDOM_INTERJECTION_MIN_INTERVAL_SECONDS + stretchBonus + Math.random() * span;
   }
 
   /**
@@ -601,6 +725,7 @@ export class CommentaryService {
     this.lastGlobalRemarkAt = -Infinity;
     this.activeGlobalCooldownMs = 0;
     this.lastTriggerAt.clear();
+    this.resetUnbrokenStretch();
   }
 
   /** Clears all cooldowns and dialogue memory (primarily for tests or fresh sessions). */
@@ -613,6 +738,7 @@ export class CommentaryService {
     this.lastHudTaunt = null;
     this.currentLevelId = 1;
     this.restartsOnCurrentLevel = 0;
+    this.resetUnbrokenStretch();
   }
 
   /** Returns remaining cooldown in ms (0 if ready) for a non-forced trigger. */
@@ -706,6 +832,9 @@ export class CommentaryService {
    * and streak milestone escalation) while updating cooldowns and variety memory.
    */
   public getDeathCommentary(ctx: CommentaryContext): DeathCommentaryBundle {
+    // Dying ends the current unbroken gameplay stretch
+    this.resetUnbrokenStretch();
+
     const nowMs = ctx.nowMs ?? Date.now();
     const levelId = clampLevelId(ctx.levelId);
     const stage = getDifficultyStage(levelId);
@@ -988,6 +1117,11 @@ export class CommentaryService {
       );
     }
 
+    // 7b. Random interjection during long, unbroken stretches (strictly non-level-specific)
+    if (trigger === 'random_interjection') {
+      return this.pickFromPool(RANDOM_INTERJECTION_INSULTS, nowMs);
+    }
+
     // 8. Ambient commentary (performance & stage aware)
     if (levelDeaths === 0 && progressRatio >= 0.35 && levelId < 99 && Math.random() < 0.28) {
       return this.pickFromPool(FLAWLESS_RUN_MOCKERY, nowMs);
@@ -1010,6 +1144,7 @@ export class CommentaryService {
       return levelId >= 99 ? 3.4 : 3.0;
     }
     if (trigger === 'victory') return 3.2;
+    if (trigger === 'random_interjection') return text.length > 52 ? 3.6 : 3.2;
     if (trigger === 'jump_spam') return 2.5;
     if (trigger === 'trap' || trigger === 'fake_reward') return 2.7;
     if (text.length > 52) return 3.3;

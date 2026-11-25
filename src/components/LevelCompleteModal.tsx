@@ -8,20 +8,10 @@ import { audioManager } from '../engine/audio';
 import { formatTimeMs } from '../engine/saveManager';
 import type { LevelCompletePayload } from '../types/game';
 
-export type LeaderboardSyncStatus =
-  | 'idle'
-  | 'syncing'
-  | 'submitted'
-  | 'existing_faster'
-  | 'unauthenticated'
-  | 'error';
-
 export interface LevelCompleteModalProps {
   payload: LevelCompletePayload;
   isFinalLevel: boolean;
   totalDeathsGlobal?: number;
-  leaderboardSyncStatus?: LeaderboardSyncStatus;
-  onOpenLeaderboards?: () => void;
   onNextLevel: () => void;
   onReplay: () => void;
   onOpenLevels: () => void;
@@ -41,8 +31,6 @@ export function LevelCompleteModal({
   payload,
   isFinalLevel,
   totalDeathsGlobal,
-  leaderboardSyncStatus = 'idle',
-  onOpenLeaderboards,
   onNextLevel,
   onReplay,
   onOpenLevels,
@@ -196,33 +184,6 @@ export function LevelCompleteModal({
                     Levels
                   </button>
                 </div>
-
-                {onOpenLeaderboards && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      audioManager.playButtonClick();
-                      onOpenLeaderboards();
-                    }}
-                    className="w-full inline-flex items-center justify-between gap-2 py-2 px-3 rounded-lg border border-[#F59E0B]/50 bg-[#1A1A1F] text-xs font-semibold text-[#F5F3EE] hover:border-[#F59E0B] transition-colors cursor-pointer"
-                  >
-                    <span className="inline-flex items-center gap-1.5">
-                      <Trophy className="w-3.5 h-3.5 text-[#F59E0B]" />
-                      <span>Global Leaderboard</span>
-                    </span>
-                    <span className="text-[10px] font-mono-tabular text-[#D6D1C7]">
-                      {leaderboardSyncStatus === 'syncing'
-                        ? 'Syncing...'
-                        : leaderboardSyncStatus === 'submitted'
-                          ? 'Synced!'
-                          : leaderboardSyncStatus === 'existing_faster'
-                            ? 'PB Kept'
-                            : leaderboardSyncStatus === 'unauthenticated'
-                              ? 'Sign in to rank'
-                              : 'Compare'}
-                    </span>
-                  </button>
-                )}
               </div>
             </div>
           </div>
@@ -349,33 +310,6 @@ export function LevelCompleteModal({
                   Levels
                 </button>
               </div>
-
-              {onOpenLeaderboards && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    audioManager.playButtonClick();
-                    onOpenLeaderboards();
-                  }}
-                  className="w-full inline-flex items-center justify-between gap-2 py-2 px-3 rounded-lg border border-[#DC2626]/45 bg-[#FFFFFF] text-xs font-semibold text-[#111111] hover:border-[#DC2626] transition-colors cursor-pointer"
-                >
-                  <span className="inline-flex items-center gap-1.5">
-                    <Trophy className="w-3.5 h-3.5 text-[#DC2626]" />
-                    <span>Global Leaderboard</span>
-                  </span>
-                  <span className="text-[10px] font-mono-tabular text-[#57534E]">
-                    {leaderboardSyncStatus === 'syncing'
-                      ? 'Syncing...'
-                      : leaderboardSyncStatus === 'submitted'
-                        ? 'Synced!'
-                        : leaderboardSyncStatus === 'existing_faster'
-                          ? 'PB Kept'
-                          : leaderboardSyncStatus === 'unauthenticated'
-                            ? 'Sign in to rank'
-                            : 'Compare'}
-                  </span>
-                </button>
-              )}
             </div>
           </div>
         </div>

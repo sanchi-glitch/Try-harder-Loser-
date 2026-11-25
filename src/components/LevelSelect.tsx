@@ -1,4 +1,4 @@
-import { Check, ChevronLeft, ChevronRight, Home, Lock, Play, Trophy } from 'lucide-react';
+import { Check, ChevronLeft, ChevronRight, Home, Lock, Play } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getDifficultyStage } from '../data/difficultyStages';
 import { CHAPTERS, LEVELS } from '../data/levels';
@@ -10,7 +10,6 @@ interface LevelSelectProps {
   save: SaveData;
   modalOpen?: boolean;
   onSelectLevel: (levelId: number) => void;
-  onOpenLeaderboards?: (levelId: number) => void;
   onBack: () => void;
 }
 
@@ -48,7 +47,6 @@ export function LevelSelect({
   save,
   modalOpen = false,
   onSelectLevel,
-  onOpenLeaderboards,
   onBack,
 }: LevelSelectProps) {
   const totalLevels = LEVELS.length;
@@ -365,19 +363,6 @@ export function LevelSelect({
         </h1>
 
         <div className="flex items-center gap-2 shrink-0">
-          {onOpenLeaderboards && (
-            <button
-              type="button"
-              onClick={() => {
-                audioManager.playButtonClick();
-                onOpenLeaderboards(focusedLevelId);
-              }}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-[#111111]/25 bg-[#FFFFFF] text-[11px] sm:text-xs font-semibold text-[#111111] hover:border-[#DC2626] hover:text-[#DC2626] transition-colors cursor-pointer whitespace-nowrap"
-            >
-              <Trophy className="w-3.5 h-3.5 text-[#DC2626]" />
-              <span>Rankings</span>
-            </button>
-          )}
           <div className="text-[11px] sm:text-sm font-mono-tabular text-[#57534E] whitespace-nowrap">
             {completedTotal}/{totalLevels} Cleared · {save.totalDeaths} Deaths
           </div>

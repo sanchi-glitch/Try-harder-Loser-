@@ -31,12 +31,13 @@ export const ADMOB_TEST_AD_UNITS = {
 } as const;
 
 export const MAX_REWARDED_ADS_PER_DEATH = 3;
+export const INTERSTITIAL_LEVEL_INTERVAL = 3;
 
 export type AdUnitFormat = 'interstitial' | 'rewarded' | 'banner';
 
 export interface InterstitialResult {
   shown: boolean;
-  reason: 'shown' | 'unavailable' | 'cooldown' | 'offline' | 'busy' | 'error';
+  reason: 'shown' | 'interval' | 'unavailable' | 'cooldown' | 'offline' | 'busy' | 'error';
 }
 
 export interface RewardedAdResult {
@@ -44,7 +45,7 @@ export interface RewardedAdResult {
   reason: 'rewarded' | 'dismissed_early' | 'unavailable' | 'offline' | 'busy' | 'error';
 }
 
-export type RewardedAdPurpose = 'extra_life' | 'hint';
+export type RewardedAdPurpose = 'extra_life' | 'hint' | 'darkness_light';
 
 export interface DevTestAdSession {
   format: 'interstitial' | 'rewarded';
@@ -139,12 +140,14 @@ class AdMobService {
   private initialized = false;
   private isShowingFullscreenAd = false;
 
-  // Interstitial state & anti-spam guards
+  // Interstitial state & every-3-levels frequency guard
   private interstitialLoaded = false;
   private interstitialLoading = false;
   private lastInterstitialShownAt = 0;
   private lastInterstitialCompletedLevelId: number | null = null;
-  private readonly interstitialMinGapMs = 15_000;
+  private lastCountedTransitionLevelId: number | null = null;
+  private completedLevelsSinceLastInterstitial = 0;
+  private readonly interstitialMinGapMs = 10_000;
 
   // Rewarded state
   private rewardedLoaded = false;
@@ -393,19 +396,44 @@ class AdMobService {
   }
 
   /**
-   * Displays an interstitial ad strictly during level-to-next-level transitions.
-   * Never blocks indefinitely, never displays on same-level restarts, and
-   * avoids consecutive/duplicate ads.
+   * Returns how many completed level transitions have elapsed since the last interstitial ad.
+   */
+  public getCompletedLevelsSinceLastInterstitial(): number {
+    return this.completedLevelsSinceLastInterstitial;
+  }
+
+  /**
+   * Displays an interstitial ad strictly after every 3 completed levels during
+   * level-to-next-level transitions. Never blocks indefinitely, never displays
+   * on same-level restarts, and avoids consecutive/duplicate ads.
    */
   public async showLevelTransitionInterstitial(
     completedLevelId: number,
     nextLevelId: number,
   ): Promise<InterstitialResult> {
-    // Never show when restarting/replaying the same level
+    // Never show or count when restarting/replaying the same level
     if (nextLevelId <= completedLevelId) {
       return { shown: false, reason: 'cooldown' };
     }
-    // Avoid consecutive duplicate displays for the same transition or within cooldown
+
+    // Count each unique forward level transition once toward the 3-level cadence
+    if (this.lastCountedTransitionLevelId !== completedLevelId) {
+      this.lastCountedTransitionLevelId = completedLevelId;
+      this.completedLevelsSinceLastInterstitial += 1;
+    }
+
+    // Enforce every-3-levels schedule (levels 1 & 2 skip; 3rd completed level shows ad)
+    if (this.completedLevelsSinceLastInterstitial < INTERSTITIAL_LEVEL_INTERVAL) {
+      if (this.completedLevelsSinceLastInterstitial === INTERSTITIAL_LEVEL_INTERVAL - 1) {
+        void this.preloadInterstitial();
+      }
+      return { shown: false, reason: 'interval' };
+    }
+
+    // Reset the 3-level counter now that we reached the scheduled interstitial slot
+    this.completedLevelsSinceLastInterstitial = 0;
+
+    // Avoid consecutive duplicate displays for the same transition or within anti-spam gap
     const now = Date.now();
     if (
       this.lastInterstitialCompletedLevelId === completedLevelId ||
@@ -558,11 +586,20 @@ class AdMobService {
   }
 
   /**
-   * Voluntarily shows ONE rewarded advertisement to unlock a cryptic obstacle hint (Levels 1–30).
+   * Voluntarily shows ONE rewarded advertisement to unlock a cryptic obstacle hint (Levels 1–50).
    * Uses the exact Rewarded Ad Unit ID and grants the hint ONLY on verified ad completion.
    */
   public async showRewardedHintAd(): Promise<RewardedAdResult> {
     return this.showRewardedAd('hint');
+  }
+
+  /**
+   * Voluntarily shows ONE rewarded advertisement on darkness levels to reduce darkness ahead
+   * of the player while keeping surrounding darkness intact.
+   * Grants the forward light boost ONLY on verified ad completion.
+   */
+  public async showRewardedLightBoostAd(): Promise<RewardedAdResult> {
+    return this.showRewardedAd('darkness_light');
   }
 
   private async showRewardedAd(purpose: RewardedAdPurpose): Promise<RewardedAdResult> {

@@ -146,6 +146,49 @@ input[type='range'].ink-slider::-moz-range-thumb {
   }
 }
 
+@keyframes commentary-bubble-mock {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, -8px, 0) scale(0.92) rotate(0deg);
+  }
+  18% {
+    opacity: 1;
+    transform: translate3d(-3px, 1px, 0) scale(1.055) rotate(-0.85deg);
+    box-shadow:
+      3px 3px 0px rgba(220, 38, 38, 0.45),
+      0 0 0 5px rgba(220, 38, 38, 0.22);
+  }
+  34% {
+    opacity: 1;
+    transform: translate3d(3px, 0, 0) scale(1.02) rotate(0.75deg);
+    box-shadow:
+      3px 3px 0px rgba(220, 38, 38, 0.42),
+      0 0 0 8px rgba(220, 38, 38, 0.12);
+  }
+  50% {
+    opacity: 1;
+    transform: translate3d(-2px, 0, 0) scale(1.035) rotate(-0.45deg);
+    box-shadow:
+      3px 3px 0px rgba(220, 38, 38, 0.38),
+      0 0 0 3px rgba(220, 38, 38, 0.14);
+  }
+  68% {
+    opacity: 1;
+    transform: translate3d(1.5px, 0, 0) scale(0.995) rotate(0.25deg);
+    box-shadow:
+      3px 3px 0px rgba(220, 38, 38, 0.35),
+      0 0 0 0 rgba(220, 38, 38, 0);
+  }
+  84% {
+    opacity: 1;
+    transform: translate3d(-0.8px, 0, 0) scale(1.01) rotate(-0.1deg);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1) rotate(0deg);
+  }
+}
+
 @keyframes hint-arrive-pop {
   0% {
     opacity: 0;
@@ -210,6 +253,11 @@ input[type='range'].ink-slider::-moz-range-thumb {
   animation: taunt-slam 240ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
+.animate-commentary-mock {
+  animation: commentary-bubble-mock 620ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  will-change: transform, opacity, box-shadow;
+}
+
 .animate-hint-available {
   animation:
     hint-arrive-pop 240ms cubic-bezier(0.16, 1, 0.3, 1) both,
@@ -225,6 +273,7 @@ input[type='range'].ink-slider::-moz-range-thumb {
 @media (prefers-reduced-motion: reduce) {
   .animate-rage-shake,
   .animate-trap-shake,
+  .animate-commentary-mock,
   .animate-hint-available,
   .animate-hint-sonar {
     animation: none;

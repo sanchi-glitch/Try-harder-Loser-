@@ -99,28 +99,38 @@ export function TitleScreen({
       const scale = Math.min(w / 960, h / 540);
       const ox = (w - 960 * scale) * 0.5;
       const oy = (h - 540 * scale) * 0.5;
+      const viewMinX = -ox / scale;
+      const viewMaxX = (w - ox) / scale;
+      const viewMinY = -oy / scale;
+      const viewMaxY = (h - oy) / scale;
       ctx.translate(ox, oy);
       ctx.scale(scale, scale);
 
-      // Subtle architectural drafting grid
+      // Subtle architectural drafting grid extending seamlessly edge to edge
       ctx.strokeStyle = 'rgba(17, 17, 17, 0.042)';
       ctx.lineWidth = 1;
-      const drift = (t * 12) % 40;
+      const gridSize = 40;
+      const drift = (t * 12) % gridSize;
+      const firstX = Math.floor((viewMinX + drift) / gridSize) * gridSize - drift;
+      const firstY = Math.floor(viewMinY / gridSize) * gridSize;
       ctx.beginPath();
-      for (let x = -drift; x <= 960; x += 40) {
-        ctx.moveTo(x, 0);
-        ctx.lineTo(x, 540);
+      for (let x = firstX; x <= viewMaxX + gridSize; x += gridSize) {
+        ctx.moveTo(x, viewMinY);
+        ctx.lineTo(x, viewMaxY);
       }
-      for (let y = 0; y <= 540; y += 40) {
-        ctx.moveTo(0, y);
-        ctx.lineTo(960, y);
+      for (let y = firstY; y <= viewMaxY + gridSize; y += gridSize) {
+        ctx.moveTo(viewMinX, y);
+        ctx.lineTo(viewMaxX, y);
       }
       ctx.stroke();
 
-      // Delicate floating ink dust motes
+      // Delicate floating ink dust motes across full visible width
+      const spanW = Math.max(980, viewMaxX - viewMinX + 20);
+      const moteCount = Math.max(12, Math.round((spanW / 980) * 12));
       ctx.fillStyle = 'rgba(17, 17, 17, 0.12)';
-      for (let i = 0; i < 12; i++) {
-        const mx = ((i * 173 + t * (8 + (i % 3) * 3)) % 980) - 10;
+      for (let i = 0; i < moteCount; i++) {
+        const mx =
+          ((((i * 173 + t * (8 + (i % 3) * 3)) % spanW) + spanW) % spanW) + viewMinX - 10;
         const my = 50 + ((i * 71) % 340) + Math.sin(t * 1.2 + i) * 8;
         ctx.beginPath();
         ctx.arc(mx, my, 1.3 + (i % 2) * 0.5, 0, Math.PI * 2);
@@ -142,18 +152,19 @@ export function TitleScreen({
       ctx.fillRect(0, floorY, 536, 1.5);
       ctx.fillRect(640, floorY, 340, 1.5);
 
-      // Cheeky floating crumble ledge over gap
+      // Cheeky floating crumble ledge over gap (slightly thicker visual height)
       const crumbleBob = Math.sin(t * 2.2) * 2.5;
+      const crumbleH = 26;
       ctx.fillStyle = 'rgba(17, 17, 17, 0.1)';
-      ctx.fillRect(560, floorY + crumbleBob + 4, 64, 18);
+      ctx.fillRect(560, floorY + crumbleBob + 4, 64, crumbleH);
       ctx.fillStyle = '#111111';
-      ctx.fillRect(556, floorY + crumbleBob, 64, 18);
+      ctx.fillRect(556, floorY + crumbleBob, 64, crumbleH);
       ctx.strokeStyle = '#F5F3EE';
       ctx.lineWidth = 1.5;
       ctx.beginPath();
       ctx.moveTo(580, floorY + crumbleBob);
-      ctx.lineTo(588, floorY + crumbleBob + 10);
-      ctx.lineTo(576, floorY + crumbleBob + 18);
+      ctx.lineTo(588, floorY + crumbleBob + crumbleH * 0.55);
+      ctx.lineTo(576, floorY + crumbleBob + crumbleH);
       ctx.stroke();
 
       // Sneaky pop-up spike pulsing subtly
@@ -341,12 +352,24 @@ export function TitleScreen({
       ctx.textAlign = 'center';
       ctx.fillText('Totally Fair.', 89, floorY - 35);
 
-      // Soft warm sketchbook vignette around edges
-      const vig = ctx.createRadialGradient(480, 260, 180, 480, 270, 620);
+      // Soft warm sketchbook vignette seamlessly spanning entire visible background
+      const fullW = viewMaxX - viewMinX;
+      const fullH = viewMaxY - viewMinY;
+      const vigCenterX = (viewMinX + viewMaxX) * 0.5;
+      const vigCenterY = (viewMinY + viewMaxY) * 0.48;
+      const vigOuterRadius = Math.hypot(fullW * 0.54, fullH * 0.54);
+      const vig = ctx.createRadialGradient(
+        vigCenterX,
+        vigCenterY,
+        Math.min(fullW, fullH) * 0.34,
+        vigCenterX,
+        (viewMinY + viewMaxY) * 0.5,
+        vigOuterRadius,
+      );
       vig.addColorStop(0, 'rgba(245, 243, 238, 0)');
       vig.addColorStop(1, 'rgba(17, 17, 17, 0.09)');
       ctx.fillStyle = vig;
-      ctx.fillRect(0, 0, 960, 540);
+      ctx.fillRect(viewMinX, viewMinY, fullW, fullH);
 
       ctx.restore();
       rafId = window.requestAnimationFrame(draw);
@@ -380,9 +403,6 @@ export function TitleScreen({
     <div className="relative w-full h-full overflow-hidden bg-[#F5F3EE] select-none flex flex-col">
       {/* Live-world minimalist stickman canvas backdrop */}
       <canvas ref={canvasRef} className="absolute inset-0 w-full h-full block pointer-events-none" />
-
-      {/* Subtle editorial ink corner registration marks */}
-      <div className="pointer-events-none absolute inset-2 sm:inset-4 border border-[#111111]/10 rounded-lg" />
 
       {/* Clean horizontal top bar on Home Screen */}
       <header className="relative z-20 shrink-0 flex items-center justify-between gap-3 safe-px sm:px-8 pt-2 sm:pt-3.5">

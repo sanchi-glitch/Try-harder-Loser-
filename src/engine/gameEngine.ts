@@ -3478,12 +3478,16 @@ export class PlatformerEngine {
     const scale = Math.min(scaleX, scaleY);
     const offsetX = (targetW - VIEW_WIDTH * scale) * 0.5;
     const offsetY = (targetH - VIEW_HEIGHT * scale) * 0.5;
+    const viewMinX = -offsetX / scale;
+    const viewMaxX = (targetW - offsetX) / scale;
+    const viewMinY = -offsetY / scale;
+    const viewMaxY = (targetH - offsetY) / scale;
 
     ctx.translate(offsetX, offsetY);
     ctx.scale(scale, scale);
 
-    // Subtle paper drafting grid (parallaxed with camera)
-    this.drawBackgroundGrid(ctx);
+    // Subtle paper drafting grid seamlessly covering entire visible background edge to edge
+    this.drawBackgroundGrid(ctx, viewMinX, viewMaxX, viewMinY, viewMaxY);
 
     // Camera transform + shake
     let shakeX = 0;
@@ -3557,24 +3561,29 @@ export class PlatformerEngine {
       ctx.restore();
     }
 
-    // Subtle warm paper edge vignette for editorial sketchbook depth
+    // Subtle warm paper edge vignette across full visible canvas (no rectangular box boundary)
+    const fullW = viewMaxX - viewMinX;
+    const fullH = viewMaxY - viewMinY;
+    const vigCenterX = (viewMinX + viewMaxX) * 0.5;
+    const vigCenterY = (viewMinY + viewMaxY) * 0.48;
+    const vigOuterRadius = Math.hypot(fullW * 0.52, fullH * 0.52);
     const vig = ctx.createRadialGradient(
-      VIEW_WIDTH * 0.5,
-      VIEW_HEIGHT * 0.48,
-      VIEW_HEIGHT * 0.35,
-      VIEW_WIDTH * 0.5,
-      VIEW_HEIGHT * 0.5,
-      VIEW_WIDTH * 0.72,
+      vigCenterX,
+      vigCenterY,
+      Math.min(fullW, fullH) * 0.35,
+      vigCenterX,
+      (viewMinY + viewMaxY) * 0.5,
+      vigOuterRadius,
     );
     vig.addColorStop(0, 'rgba(245, 243, 238, 0)');
     vig.addColorStop(1, 'rgba(17, 17, 17, 0.08)');
     ctx.fillStyle = vig;
-    ctx.fillRect(0, 0, VIEW_WIDTH, VIEW_HEIGHT);
+    ctx.fillRect(viewMinX, viewMinY, fullW, fullH);
 
     // Crimson edge vignette flash on death
     if (this.deathFlashAlpha > 0) {
       ctx.fillStyle = `rgba(220, 38, 38, ${this.deathFlashAlpha.toFixed(3)})`;
-      ctx.fillRect(0, 0, VIEW_WIDTH, VIEW_HEIGHT);
+      ctx.fillRect(viewMinX, viewMinY, fullW, fullH);
     }
 
     ctx.restore();
@@ -3731,43 +3740,84 @@ export class PlatformerEngine {
     ctx.fillRect(0, 0, VIEW_WIDTH, VIEW_HEIGHT);
   }
 
-  private drawBackgroundGrid(ctx: CanvasRenderingContext2D): void {
+  private drawBackgroundGrid(
+    ctx: CanvasRenderingContext2D,
+    viewMinX = 0,
+    viewMaxX = VIEW_WIDTH,
+    viewMinY = 0,
+    viewMaxY = VIEW_HEIGHT,
+  ): void {
     const isDark = Boolean(this.level.spotlightRadius);
     const gridSize = 40;
-    const startX = -((this.camX * 0.35) % gridSize);
+    const phaseX = ((-this.camX * 0.35) % gridSize + gridSize) % gridSize;
+    const firstX = Math.floor((viewMinX - phaseX) / gridSize) * gridSize + phaseX;
+    const firstY = Math.floor(viewMinY / gridSize) * gridSize;
+
     ctx.strokeStyle = isDark ? 'rgba(245, 243, 238, 0.01)' : 'rgba(17, 17, 17, 0.042)';
     ctx.lineWidth = 1;
     ctx.beginPath();
-    for (let x = startX; x <= VIEW_WIDTH; x += gridSize) {
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, VIEW_HEIGHT);
+    for (let x = firstX; x <= viewMaxX + gridSize; x += gridSize) {
+      ctx.moveTo(x, viewMinY);
+      ctx.lineTo(x, viewMaxY);
     }
-    for (let y = 0; y <= VIEW_HEIGHT; y += gridSize) {
-      ctx.moveTo(0, y);
-      ctx.lineTo(VIEW_WIDTH, y);
+    for (let y = firstY; y <= viewMaxY + gridSize; y += gridSize) {
+      ctx.moveTo(viewMinX, y);
+      ctx.lineTo(viewMaxX, y);
     }
     ctx.stroke();
 
-    // Soft floating atmospheric specks (nearly imperceptible in high-intensity darkness)
+    // Soft floating atmospheric specks seamlessly spanning full visible width
+    const spanW = Math.max(VIEW_WIDTH + 40, viewMaxX - viewMinX + 40);
+    const speckCount = Math.max(14, Math.round((spanW / (VIEW_WIDTH + 40)) * 14));
     ctx.fillStyle = isDark ? 'rgba(245, 243, 238, 0.02)' : 'rgba(17, 17, 17, 0.12)';
-    for (let i = 0; i < 14; i++) {
-      const mx = ((i * 197 - this.camX * 0.22 + this.worldTime * (6 + (i % 4) * 2)) % (VIEW_WIDTH + 40) + VIEW_WIDTH + 40) % (VIEW_WIDTH + 40) - 20;
+    for (let i = 0; i < speckCount; i++) {
+      const mx =
+        ((((i * 197 - this.camX * 0.22 + this.worldTime * (6 + (i % 4) * 2)) % spanW) + spanW) %
+          spanW) +
+        viewMinX -
+        20;
       const my = 65 + ((i * 83) % 340) + Math.sin(this.worldTime * 1.1 + i) * 10;
       ctx.beginPath();
       ctx.arc(mx, my, 1.3 + (i % 2) * 0.6, 0, Math.PI * 2);
       ctx.fill();
     }
 
-    // Subtle architectural drafting ticks in distant parallax
+    // Subtle architectural drafting ticks in distant parallax across entire visible width
     ctx.fillStyle = isDark ? 'rgba(245, 243, 238, 0.008)' : 'rgba(17, 17, 17, 0.04)';
-    const parallax = -(this.camX * 0.15) % 480;
-    for (let i = -1; i < 4; i++) {
-      const bx = parallax + i * 480 + 120;
-      ctx.fillRect(bx, 180, 1.5, 240);
-      ctx.fillRect(bx - 5, 180, 12, 1.5);
-      ctx.fillRect(bx + 180, 240, 1.5, 180);
-      ctx.fillRect(bx + 175, 240, 12, 1.5);
+    const tickSpacing = 480;
+    const tickPhase = ((-this.camX * 0.15) % tickSpacing + tickSpacing) % tickSpacing;
+    const firstTick =
+      Math.floor((viewMinX - tickPhase) / tickSpacing) * tickSpacing + tickPhase - tickSpacing;
+    for (let bx = firstTick; bx <= viewMaxX + tickSpacing; bx += tickSpacing) {
+      const ax = bx + 120;
+      ctx.fillRect(ax, 180, 1.5, 240);
+      ctx.fillRect(ax - 5, 180, 12, 1.5);
+      ctx.fillRect(ax + 180, 240, 1.5, 180);
+      ctx.fillRect(ax + 175, 240, 12, 1.5);
     }
+  }
+
+  /**
+   * Computes visual-only downward platform thickness so thin runnable platforms
+   * read clearly without altering collision hitboxes, top landing surfaces, or jump clearances.
+   */
+  private getVisualPlatformHeight(p: RuntimePlatform): number {
+    const baseH = p.h;
+    if (baseH > 44 || p.def.kind === 'reveal_wall') {
+      return baseH;
+    }
+    // Preserve exact height if a downward-pointing ceiling spike sits directly beneath this platform
+    for (const h of this.hazards) {
+      if (
+        h.def.dir === 'down' &&
+        h.x < p.x + p.w &&
+        h.x + h.w > p.x &&
+        Math.abs(h.y - (p.y + baseH)) <= 10
+      ) {
+        return baseH;
+      }
+    }
+    return baseH + 8;
   }
 
   private drawPlatforms(ctx: CanvasRenderingContext2D): void {
@@ -3789,15 +3839,17 @@ export class PlatformerEngine {
         continue;
       }
 
+      const visualH = this.getVisualPlatformHeight(p);
+
       if (p.def.kind === 'look_away' && !p.active) {
         // Disappeared while player looked away — subtle dashed eye ghost
         ctx.save();
         ctx.strokeStyle = 'rgba(17, 17, 17, 0.22)';
         ctx.setLineDash([4, 6]);
         ctx.lineWidth = 1.6;
-        ctx.strokeRect(p.x + 1, p.y + 1, p.w - 2, p.h - 2);
+        ctx.strokeRect(p.x + 1, p.y + 1, p.w - 2, visualH - 2);
         const cx = p.x + p.w / 2;
-        const cy = p.y + p.h / 2;
+        const cy = p.y + visualH / 2;
         ctx.setLineDash([]);
         ctx.beginPath();
         ctx.moveTo(cx - 7, cy);
@@ -3813,21 +3865,22 @@ export class PlatformerEngine {
         ctx.strokeStyle = 'rgba(17, 17, 17, 0.24)';
         ctx.setLineDash([5, 5]);
         ctx.lineWidth = 1.6;
-        ctx.strokeRect(p.x + 1, p.y + 1, p.w - 2, p.h - 2);
+        ctx.strokeRect(p.x + 1, p.y + 1, p.w - 2, visualH - 2);
         const fillW = Math.max(0, (p.w - 6) * p.blinkOffProgress);
         ctx.fillStyle = 'rgba(220, 38, 38, 0.28)';
-        ctx.fillRect(p.x + 3, p.y + p.h - 4, fillW, 2.5);
+        ctx.fillRect(p.x + 3, p.y + visualH - 4, fillW, 2.5);
         ctx.restore();
         continue;
       }
 
       if ((p.def.kind === 'crumble' && p.crumbleState === 'gone') || (p.def.kind === 'shrink' && !p.active)) {
         // Faint dashed ghost showing where platform will respawn
+        const ghostH = p.def.h <= 44 ? p.def.h + 8 : p.def.h;
         ctx.save();
         ctx.strokeStyle = 'rgba(17, 17, 17, 0.18)';
         ctx.setLineDash([5, 5]);
         ctx.lineWidth = 1.5;
-        ctx.strokeRect(p.def.x + 1, p.def.y + 1, p.def.w - 2, p.def.h - 2);
+        ctx.strokeRect(p.def.x + 1, p.def.y + 1, p.def.w - 2, ghostH - 2);
         ctx.restore();
         continue;
       }
@@ -3841,10 +3894,10 @@ export class PlatformerEngine {
         ctx.strokeStyle = `rgba(17, 17, 17, ${alpha.toFixed(2)})`;
         ctx.setLineDash([4, 6]);
         ctx.lineWidth = 2;
-        ctx.strokeRect(p.x + 1, p.y + popRise + 1, p.w - 2, p.h - 2);
+        ctx.strokeRect(p.x + 1, p.y + popRise + 1, p.w - 2, visualH - 2);
         if (p.touchGlow > 0.05) {
           ctx.fillStyle = `rgba(17, 17, 17, ${(p.touchGlow * 0.14).toFixed(2)})`;
-          ctx.fillRect(p.x, p.y + popRise, p.w, p.h);
+          ctx.fillRect(p.x, p.y + popRise, p.w, visualH);
         }
         ctx.restore();
         continue;
@@ -3853,11 +3906,11 @@ export class PlatformerEngine {
       if (p.def.kind === 'phantom_solid' && p.phantomRevealed) {
         ctx.save();
         ctx.fillStyle = 'rgba(17, 17, 17, 0.12)';
-        ctx.fillRect(p.x, p.y + popRise, p.w, p.h);
+        ctx.fillRect(p.x, p.y + popRise, p.w, visualH);
         ctx.strokeStyle = 'rgba(17, 17, 17, 0.35)';
         ctx.setLineDash([6, 6]);
         ctx.lineWidth = 1.6;
-        ctx.strokeRect(p.x + 1, p.y + popRise + 1, p.w - 2, p.h - 2);
+        ctx.strokeRect(p.x + 1, p.y + popRise + 1, p.w - 2, visualH - 2);
         ctx.restore();
         continue;
       }
@@ -3899,15 +3952,15 @@ export class PlatformerEngine {
         ctx.setLineDash([4, 6]);
         ctx.lineWidth = 2;
         ctx.beginPath();
-        ctx.moveTo(p.def.x - (p.def.moveX ?? 0) + p.w / 2, p.def.y - (p.def.moveY ?? 0) + p.h / 2);
-        ctx.lineTo(p.def.x + (p.def.moveX ?? 0) + p.w / 2, p.def.y + (p.def.moveY ?? 0) + p.h / 2);
+        ctx.moveTo(p.def.x - (p.def.moveX ?? 0) + p.w / 2, p.def.y - (p.def.moveY ?? 0) + visualH / 2);
+        ctx.lineTo(p.def.x + (p.def.moveX ?? 0) + p.w / 2, p.def.y + (p.def.moveY ?? 0) + visualH / 2);
         ctx.stroke();
         ctx.restore();
       }
 
       if (p.def.kind === 'bounce') {
         ctx.fillStyle = '#111111';
-        ctx.fillRect(p.x, p.y + oy + 8, p.w, p.h - 8);
+        ctx.fillRect(p.x, p.y + oy + 8, p.w, visualH - 8);
         ctx.fillStyle = '#DC2626';
         ctx.fillRect(p.x + 3, p.y + oy, p.w - 6, 8);
         ctx.restore();
@@ -3918,11 +3971,11 @@ export class PlatformerEngine {
 
       // Crisp architectural shadow behind platform
       ctx.fillStyle = isDarkPlat ? 'rgba(0, 0, 0, 0.45)' : 'rgba(17, 17, 17, 0.11)';
-      ctx.fillRect(p.x + ox + 4, p.y + oy + 4, p.w, p.h);
+      ctx.fillRect(p.x + ox + 4, p.y + oy + 4, p.w, visualH);
 
       // Matte black ink platform (or shadowy dark slate in Lights-Out mode so silhouettes read faintly when lit)
       ctx.fillStyle = isDarkPlat ? '#1C1C22' : '#111111';
-      ctx.fillRect(p.x + ox, p.y + oy, p.w, p.h);
+      ctx.fillRect(p.x + ox, p.y + oy, p.w, visualH);
 
       // Subtle walkable-edge hairline
       ctx.fillStyle = isDarkPlat ? 'rgba(245, 243, 238, 0.34)' : 'rgba(245, 243, 238, 0.22)';
@@ -3960,7 +4013,7 @@ export class PlatformerEngine {
       } else if (p.def.kind === 'shrink') {
         ctx.strokeStyle = p.shrinkActive ? '#DC2626' : '#F5F3EE';
         ctx.lineWidth = 1.6;
-        const cy = p.y + oy + Math.min(11, p.h / 2);
+        const cy = p.y + oy + Math.min(13, visualH / 2);
         if (p.w > 24) {
           ctx.beginPath();
           ctx.moveTo(p.x + ox + 8, cy - 4);
@@ -3974,7 +4027,7 @@ export class PlatformerEngine {
       } else if (p.def.kind === 'elevator') {
         const up = (p.def.moveY ?? -150) < 0;
         const cx = p.x + ox + p.w / 2;
-        const cy = p.y + oy + p.h / 2;
+        const cy = p.y + oy + visualH / 2;
         ctx.strokeStyle = p.elevatorActive ? '#DC2626' : '#F5F3EE';
         ctx.lineWidth = 1.8;
         ctx.beginPath();
@@ -3989,23 +4042,23 @@ export class PlatformerEngine {
         const dotCount = Math.max(2, Math.floor(p.w / 26));
         for (let i = 0; i < dotCount; i++) {
           const dx = p.x + ox + ((i + 0.5) / dotCount) * p.w;
-          ctx.fillRect(dx - 3, p.y + oy + p.h / 2 - 1.5, 6, 3);
+          ctx.fillRect(dx - 3, p.y + oy + visualH / 2 - 1.5, 6, 3);
         }
         if (p.blinkWarning) {
           ctx.strokeStyle = '#DC2626';
           ctx.lineWidth = 2;
-          ctx.strokeRect(p.x + ox + 1, p.y + oy + 1, p.w - 2, p.h - 2);
+          ctx.strokeRect(p.x + ox + 1, p.y + oy + 1, p.w - 2, visualH - 2);
         }
       } else if (p.def.kind === 'crumble') {
         ctx.strokeStyle = '#F5F3EE';
         ctx.lineWidth = 1.6;
         ctx.beginPath();
         ctx.moveTo(p.x + ox + p.w * 0.25, p.y + oy);
-        ctx.lineTo(p.x + ox + p.w * 0.32, p.y + oy + p.h * 0.55);
-        ctx.lineTo(p.x + ox + p.w * 0.22, p.y + oy + p.h);
+        ctx.lineTo(p.x + ox + p.w * 0.32, p.y + oy + visualH * 0.55);
+        ctx.lineTo(p.x + ox + p.w * 0.22, p.y + oy + visualH);
         ctx.moveTo(p.x + ox + p.w * 0.68, p.y + oy);
-        ctx.lineTo(p.x + ox + p.w * 0.62, p.y + oy + p.h * 0.6);
-        ctx.lineTo(p.x + ox + p.w * 0.74, p.y + oy + p.h);
+        ctx.lineTo(p.x + ox + p.w * 0.62, p.y + oy + visualH * 0.6);
+        ctx.lineTo(p.x + ox + p.w * 0.74, p.y + oy + visualH);
         ctx.stroke();
       } else if (
         p.def.kind === 'fake_drop' &&
@@ -4040,16 +4093,16 @@ export class PlatformerEngine {
         ctx.lineWidth = 1.7;
         ctx.beginPath();
         ctx.moveTo(p.x + ox + p.w * 0.22, p.y + oy);
-        ctx.lineTo(p.x + ox + p.w * 0.34, p.y + oy + p.h * 0.55);
-        ctx.lineTo(p.x + ox + p.w * 0.2, p.y + oy + p.h);
+        ctx.lineTo(p.x + ox + p.w * 0.34, p.y + oy + visualH * 0.55);
+        ctx.lineTo(p.x + ox + p.w * 0.2, p.y + oy + visualH);
         ctx.moveTo(p.x + ox + p.w * 0.72, p.y + oy);
-        ctx.lineTo(p.x + ox + p.w * 0.62, p.y + oy + p.h * 0.6);
-        ctx.lineTo(p.x + ox + p.w * 0.78, p.y + oy + p.h);
+        ctx.lineTo(p.x + ox + p.w * 0.62, p.y + oy + visualH * 0.6);
+        ctx.lineTo(p.x + ox + p.w * 0.78, p.y + oy + visualH);
         ctx.stroke();
       } else if (p.def.kind === 'look_away') {
         // Minimalist watching-eye glyph (stays solid only while player faces it!)
         const cx = p.x + ox + p.w / 2;
-        const cy = p.y + oy + p.h / 2;
+        const cy = p.y + oy + visualH / 2;
         ctx.strokeStyle = '#F5F3EE';
         ctx.lineWidth = 1.6;
         ctx.beginPath();
@@ -4061,7 +4114,7 @@ export class PlatformerEngine {
         ctx.fill();
       } else if (p.def.kind === 'follow_player') {
         const cx = p.x + ox + p.w / 2;
-        const cy = p.y + oy + p.h / 2;
+        const cy = p.y + oy + visualH / 2;
         ctx.strokeStyle = '#DC2626';
         ctx.lineWidth = 1.6;
         ctx.beginPath();
@@ -4076,11 +4129,11 @@ export class PlatformerEngine {
         ctx.stroke();
       } else if (p.def.kind === 'moving') {
         ctx.fillStyle = p.def.moveOnStand && !p.moveActivated ? '#DC2626' : '#F5F3EE';
-        ctx.fillRect(p.x + p.w / 2 - 12, p.y + oy + p.h / 2 - 2, 24, 4);
+        ctx.fillRect(p.x + p.w / 2 - 12, p.y + oy + visualH / 2 - 2, 24, 4);
       } else if (p.def.kind === 'reveal_wall') {
         ctx.strokeStyle = 'rgba(245, 243, 238, 0.25)';
         ctx.lineWidth = 1.5;
-        ctx.strokeRect(p.x + 6, p.y + oy + 8, p.w - 12, p.h - 16);
+        ctx.strokeRect(p.x + 6, p.y + oy + 8, p.w - 12, visualH - 16);
       }
 
       ctx.restore();

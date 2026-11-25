@@ -84,6 +84,11 @@ interface RuntimePlatform {
   fakeUnstableTimer: number;
   // look_away visibility state
   lookAwayVisible: boolean;
+  // pit_stretch state (disguised floor eaten by adjacent pit on landing)
+  stretchActive: boolean;
+  stretchDelayTimer: number;
+  stretchedAmount: number;
+  stretchDustTimer: number;
 }
 
 interface RuntimeHazard {
@@ -461,7 +466,14 @@ export class PlatformerEngine {
     audioManager.setAtmosphereLevel(levelId, this.deathStreakByLevel.get(levelId) ?? 0);
     this.buildEntities(true);
     this.respawnPlayerInstant();
+    if (this.isFinale100Theme() && !isRestart) {
+      this.showPrankBanner('LEVEL 100 · ZERO CHECKPOINTS · 0.1% CLEAR RATE', 3.4);
+    }
     this.emitHud();
+  }
+
+  private isFinale100Theme(): boolean {
+    return this.level.visualTheme === 'finale_100' || this.level.id === 100;
   }
 
   public restartLevel(): void {
@@ -524,6 +536,14 @@ export class PlatformerEngine {
         p.y = p.def.y;
         p.elevatorActive = false;
         p.elevatorIdleTimer = 0;
+      } else if (p.def.kind === 'pit_stretch' && (p.stretchActive || p.stretchedAmount > 0 || !p.active)) {
+        p.x = p.def.x;
+        p.w = p.def.w;
+        p.active = p.revealed;
+        p.stretchActive = false;
+        p.stretchDelayTimer = 0;
+        p.stretchedAmount = 0;
+        p.stretchDustTimer = 0;
       }
     }
     for (const h of this.hazards) {
@@ -1122,6 +1142,10 @@ export class PlatformerEngine {
         fakeUnstableShaking: false,
         fakeUnstableTimer: 0,
         lookAwayVisible: true,
+        stretchActive: false,
+        stretchDelayTimer: 0,
+        stretchedAmount: 0,
+        stretchDustTimer: 0,
       };
     });
 
@@ -1978,6 +2002,15 @@ export class PlatformerEngine {
             p.shrinkActive = true;
             audioManager.playTrap();
             this.recordTrick('trap');
+          } else if (p.def.kind === 'pit_stretch' && !p.stretchActive) {
+            p.stretchActive = true;
+            p.stretchDelayTimer = p.def.stretchDelay ?? 0.04;
+            audioManager.playTrap();
+            this.triggerShake(0.11, 3.0);
+            this.recordTrick('trap');
+            if (p.def.prankMessage) {
+              this.showPrankBanner(p.def.prankMessage);
+            }
           } else if (p.def.kind === 'elevator') {
             if (!p.elevatorActive) {
               p.elevatorActive = true;
@@ -2253,6 +2286,56 @@ export class PlatformerEngine {
             p.x = p.def.x;
             p.w = p.def.w;
             p.active = true;
+          }
+        }
+      }
+
+      if (p.def.kind === 'pit_stretch' && p.active) {
+        if (
+          !p.stretchActive &&
+          this.state === 'alive' &&
+          p.def.stretchTriggerX !== undefined &&
+          playerCenterX >= p.def.stretchTriggerX &&
+          Math.abs(playerBottomY - p.y) < 110
+        ) {
+          p.stretchActive = true;
+          p.stretchDelayTimer = p.def.stretchDelay ?? 0.04;
+          audioManager.playTrap();
+          this.triggerShake(0.11, 3.0);
+          this.recordTrick('trap');
+          if (p.def.prankMessage) {
+            this.showPrankBanner(p.def.prankMessage);
+          }
+        }
+        if (p.stretchActive) {
+          if (p.stretchDelayTimer > 0) {
+            p.stretchDelayTimer = Math.max(0, p.stretchDelayTimer - dt);
+          } else {
+            const maxStretch = Math.min(p.def.w, p.def.maxStretch ?? p.def.w);
+            const remaining = Math.max(0, maxStretch - p.stretchedAmount);
+            if (remaining > 0.5) {
+              const rawSpeed = (p.def.stretchSpeed ?? 210) * Math.min(1.14, cruelty.platformSpeedScale);
+              const cappedSpeed = Math.min(268, rawSpeed); // Always outrunnable vs BASE_MOVE_SPEED (290)
+              const delta = Math.min(remaining, cappedSpeed * dt);
+              const edge = p.def.stretchEdge ?? 'left';
+              if (edge === 'left') {
+                p.x += delta;
+                p.w = Math.max(0, p.w - delta);
+              } else {
+                p.w = Math.max(0, p.w - delta);
+              }
+              p.stretchedAmount += delta;
+              p.stretchDustTimer -= dt;
+              if (p.stretchDustTimer <= 0) {
+                p.stretchDustTimer = 0.045;
+                const edgeX = edge === 'left' ? p.x : p.x + p.w;
+                this.spawnDust(edgeX, p.y + 4, 3, '#111111');
+              }
+              if (p.w <= 4) {
+                p.w = 0;
+                p.active = false;
+              }
+            }
           }
         }
       }
@@ -3024,15 +3107,6 @@ export class PlatformerEngine {
             radius = 152;
             weight = 0.92;
             isHighDifficulty = true;
-          } else if (h.popupState === 'hidden') {
-            const trigRadius = h.def.triggerRadius ?? 82;
-            const trigX = h.def.triggerX ?? h.x + h.w * 0.5;
-            const dTrig = Math.hypot(pcx - trigX, (pcy - (h.y + h.h * 0.5)) * 0.7);
-            if (dTrig < trigRadius * 1.25) {
-              const p = 1 - dTrig / (trigRadius * 1.25);
-              peakPressure = Math.max(peakPressure, p * p * 0.48);
-            }
-            continue;
           } else {
             continue;
           }
@@ -3096,8 +3170,16 @@ export class PlatformerEngine {
         case 'fake_drop':
           if (p.dropState === 'shaking' || p.dropState === 'dropped') {
             platPressure = 0.78;
-          } else if (dist < 76) {
-            platPressure = (1 - dist / 76) * 0.38;
+          }
+          break;
+        case 'pit_stretch':
+          if (p.stretchActive) {
+            const edgeX = (p.def.stretchEdge ?? 'left') === 'left' ? p.x : p.x + p.w;
+            const edgeDist = Math.abs(pcx - edgeX);
+            platPressure = Math.max(0.55, Math.min(0.92, 1 - edgeDist / 170));
+            if (edgeDist < 62 && this.respawnInvulnTimer <= 0) {
+              this.triggerDangerPulse(0.58);
+            }
           }
           break;
         case 'shrink':
@@ -3464,12 +3546,13 @@ export class PlatformerEngine {
     }
 
     const isDarkLevel = Boolean(this.level.spotlightRadius);
+    const isFinale100 = this.isFinale100Theme();
 
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
 
-    // Fill warm drafting-paper background — or near-zero ambient pitch black in high-intensity darkness levels
-    ctx.fillStyle = isDarkLevel ? '#020204' : '#F5F3EE';
+    // Fill warm drafting-paper background, obsidian charcoal on Level 100, or pitch black in darkness levels
+    ctx.fillStyle = isDarkLevel ? '#020204' : isFinale100 ? '#1A1617' : '#F5F3EE';
     ctx.fillRect(0, 0, targetW, targetH);
 
     // Compute aspect-fit uniform scale centered nicely across any landscape screen
@@ -3551,6 +3634,50 @@ export class PlatformerEngine {
       }
     }
 
+    // Level 100 Obsidian Arena framing: subtle crimson architectural corner ticks + act escalation rim
+    if (isFinale100 && !isDarkLevel) {
+      const unlockedActs =
+        1 +
+        (this.revealedTriggers.has('peak_100_a') ? 1 : 0) +
+        (this.revealedTriggers.has('peak_100_b') ? 1 : 0) +
+        (this.revealedTriggers.has('peak_100_c') ? 1 : 0);
+      const rimAlpha = 0.14 + (unlockedActs - 1) * 0.045;
+      ctx.save();
+      const vGrad = ctx.createRadialGradient(
+        VIEW_WIDTH * 0.5,
+        VIEW_HEIGHT * 0.5,
+        VIEW_WIDTH * 0.28,
+        VIEW_WIDTH * 0.5,
+        VIEW_HEIGHT * 0.5,
+        VIEW_WIDTH * 0.68,
+      );
+      vGrad.addColorStop(0, 'rgba(0, 0, 0, 0)');
+      vGrad.addColorStop(1, `rgba(127, 29, 29, ${rimAlpha.toFixed(3)})`);
+      ctx.fillStyle = vGrad;
+      ctx.fillRect(viewMinX, viewMinY, viewMaxX - viewMinX, viewMaxY - viewMinY);
+
+      // Subtle architectural crimson corner crosshairs
+      ctx.strokeStyle = 'rgba(220, 38, 38, 0.36)';
+      ctx.lineWidth = 1.5;
+      const m = 14;
+      const b = 18;
+      ctx.beginPath();
+      ctx.moveTo(m, m + b);
+      ctx.lineTo(m, m);
+      ctx.lineTo(m + b, m);
+      ctx.moveTo(VIEW_WIDTH - m - b, m);
+      ctx.lineTo(VIEW_WIDTH - m, m);
+      ctx.lineTo(VIEW_WIDTH - m, m + b);
+      ctx.moveTo(m, VIEW_HEIGHT - m - b);
+      ctx.lineTo(m, VIEW_HEIGHT - m);
+      ctx.lineTo(m + b, VIEW_HEIGHT - m);
+      ctx.moveTo(VIEW_WIDTH - m - b, VIEW_HEIGHT - m);
+      ctx.lineTo(VIEW_WIDTH - m, VIEW_HEIGHT - m);
+      ctx.lineTo(VIEW_WIDTH - m, VIEW_HEIGHT - m - b);
+      ctx.stroke();
+      ctx.restore();
+    }
+
     // Subtle reversed-controls indicator badge on world border (non-intrusive glitch line)
     if (this.inReverseControlZone && this.state === 'alive') {
       ctx.save();
@@ -3613,7 +3740,9 @@ export class PlatformerEngine {
     if (!zones || zones.length === 0) return;
 
     ctx.save();
-    ctx.strokeStyle = 'rgba(17, 17, 17, 0.17)';
+    ctx.strokeStyle = this.isFinale100Theme()
+      ? 'rgba(245, 243, 238, 0.28)'
+      : 'rgba(17, 17, 17, 0.17)';
     ctx.lineWidth = 1.5;
     ctx.lineCap = 'round';
 
@@ -3748,12 +3877,17 @@ export class PlatformerEngine {
     viewMaxY = VIEW_HEIGHT,
   ): void {
     const isDark = Boolean(this.level.spotlightRadius);
+    const isFinale100 = this.isFinale100Theme();
     const gridSize = 40;
     const phaseX = ((-this.camX * 0.35) % gridSize + gridSize) % gridSize;
     const firstX = Math.floor((viewMinX - phaseX) / gridSize) * gridSize + phaseX;
     const firstY = Math.floor(viewMinY / gridSize) * gridSize;
 
-    ctx.strokeStyle = isDark ? 'rgba(245, 243, 238, 0.01)' : 'rgba(17, 17, 17, 0.042)';
+    ctx.strokeStyle = isDark
+      ? 'rgba(245, 243, 238, 0.01)'
+      : isFinale100
+        ? 'rgba(220, 38, 38, 0.11)'
+        : 'rgba(17, 17, 17, 0.042)';
     ctx.lineWidth = 1;
     ctx.beginPath();
     for (let x = firstX; x <= viewMaxX + gridSize; x += gridSize) {
@@ -3766,24 +3900,82 @@ export class PlatformerEngine {
     }
     ctx.stroke();
 
-    // Soft floating atmospheric specks seamlessly spanning full visible width
+    if (isFinale100 && !isDark) {
+      // Bold major crimson blueprint intersections every 200px
+      const majorSize = 200;
+      const majorPhaseX = ((-this.camX * 0.35) % majorSize + majorSize) % majorSize;
+      const firstMajorX = Math.floor((viewMinX - majorPhaseX) / majorSize) * majorSize + majorPhaseX;
+      const firstMajorY = Math.floor(viewMinY / majorSize) * majorSize;
+      ctx.strokeStyle = 'rgba(220, 38, 38, 0.19)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (let x = firstMajorX; x <= viewMaxX + majorSize; x += majorSize) {
+        ctx.moveTo(x, viewMinY);
+        ctx.lineTo(x, viewMaxY);
+      }
+      for (let y = firstMajorY; y <= viewMaxY + majorSize; y += majorSize) {
+        ctx.moveTo(viewMinX, y);
+        ctx.lineTo(viewMaxX, y);
+      }
+      ctx.stroke();
+
+      // Monumental faint parallax "100" architectural watermark + Act numeral
+      const actIndex =
+        1 +
+        (this.revealedTriggers.has('peak_100_a') ? 1 : 0) +
+        (this.revealedTriggers.has('peak_100_b') ? 1 : 0) +
+        (this.revealedTriggers.has('peak_100_c') ? 1 : 0);
+      const actRoman = ['I', 'II', 'III', 'IV'][Math.min(3, actIndex - 1)];
+      const wmSpan = 960;
+      const wmPhase = ((-this.camX * 0.12) % wmSpan + wmSpan) % wmSpan;
+      const firstWm = Math.floor((viewMinX - wmPhase) / wmSpan) * wmSpan + wmPhase - wmSpan;
+      ctx.save();
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      for (let wx = firstWm; wx <= viewMaxX + wmSpan; wx += wmSpan) {
+        const cx = wx + wmSpan * 0.5;
+        ctx.fillStyle = 'rgba(220, 38, 38, 0.075)';
+        ctx.font = '800 210px "Space Grotesk", "DM Sans", sans-serif';
+        ctx.fillText('100', cx, 245);
+        ctx.fillStyle = 'rgba(245, 243, 238, 0.08)';
+        ctx.font = '700 13px "JetBrains Mono", monospace';
+        ctx.fillText(`ACT ${actRoman} / IV  ·  ZERO CHECKPOINTS`, cx, 342);
+      }
+      ctx.restore();
+    }
+
+    // Soft floating atmospheric specks (crimson embers + ash on Level 100)
     const spanW = Math.max(VIEW_WIDTH + 40, viewMaxX - viewMinX + 40);
-    const speckCount = Math.max(14, Math.round((spanW / (VIEW_WIDTH + 40)) * 14));
-    ctx.fillStyle = isDark ? 'rgba(245, 243, 238, 0.02)' : 'rgba(17, 17, 17, 0.12)';
+    const speckCount = Math.max(isFinale100 ? 22 : 14, Math.round((spanW / (VIEW_WIDTH + 40)) * (isFinale100 ? 22 : 14)));
     for (let i = 0; i < speckCount; i++) {
       const mx =
         ((((i * 197 - this.camX * 0.22 + this.worldTime * (6 + (i % 4) * 2)) % spanW) + spanW) %
           spanW) +
         viewMinX -
         20;
-      const my = 65 + ((i * 83) % 340) + Math.sin(this.worldTime * 1.1 + i) * 10;
+      const riseDrift = isFinale100 ? -(this.worldTime * (12 + (i % 3) * 5)) : 0;
+      const rawY = 65 + ((i * 83) % 340) + riseDrift;
+      const my = isFinale100
+        ? (((rawY % 390) + 390) % 390) + 25
+        : rawY + Math.sin(this.worldTime * 1.1 + i) * 10;
+      ctx.fillStyle = isDark
+        ? 'rgba(245, 243, 238, 0.02)'
+        : isFinale100
+          ? i % 3 === 0
+            ? 'rgba(239, 68, 68, 0.42)'
+            : 'rgba(245, 243, 238, 0.16)'
+          : 'rgba(17, 17, 17, 0.12)';
       ctx.beginPath();
-      ctx.arc(mx, my, 1.3 + (i % 2) * 0.6, 0, Math.PI * 2);
+      ctx.arc(mx, my, 1.3 + (i % 2) * 0.65, 0, Math.PI * 2);
       ctx.fill();
     }
 
     // Subtle architectural drafting ticks in distant parallax across entire visible width
-    ctx.fillStyle = isDark ? 'rgba(245, 243, 238, 0.008)' : 'rgba(17, 17, 17, 0.04)';
+    ctx.fillStyle = isDark
+      ? 'rgba(245, 243, 238, 0.008)'
+      : isFinale100
+        ? 'rgba(220, 38, 38, 0.14)'
+        : 'rgba(17, 17, 17, 0.04)';
     const tickSpacing = 480;
     const tickPhase = ((-this.camX * 0.15) % tickSpacing + tickSpacing) % tickSpacing;
     const firstTick =
@@ -3841,10 +4033,13 @@ export class PlatformerEngine {
 
       const visualH = this.getVisualPlatformHeight(p);
 
+      const isFinale100 = this.isFinale100Theme();
+      const ghostStroke = isFinale100 ? 'rgba(245, 243, 238, 0.34)' : 'rgba(17, 17, 17, 0.24)';
+
       if (p.def.kind === 'look_away' && !p.active) {
         // Disappeared while player looked away — subtle dashed eye ghost
         ctx.save();
-        ctx.strokeStyle = 'rgba(17, 17, 17, 0.22)';
+        ctx.strokeStyle = ghostStroke;
         ctx.setLineDash([4, 6]);
         ctx.lineWidth = 1.6;
         ctx.strokeRect(p.x + 1, p.y + 1, p.w - 2, visualH - 2);
@@ -3862,12 +4057,12 @@ export class PlatformerEngine {
       if (p.def.kind === 'phase_blink' && !p.active) {
         // Fair ghost outline + refill progress bar so disappearing path timing is crisp & readable
         ctx.save();
-        ctx.strokeStyle = 'rgba(17, 17, 17, 0.24)';
+        ctx.strokeStyle = ghostStroke;
         ctx.setLineDash([5, 5]);
         ctx.lineWidth = 1.6;
         ctx.strokeRect(p.x + 1, p.y + 1, p.w - 2, visualH - 2);
         const fillW = Math.max(0, (p.w - 6) * p.blinkOffProgress);
-        ctx.fillStyle = 'rgba(220, 38, 38, 0.28)';
+        ctx.fillStyle = isFinale100 ? 'rgba(239, 68, 68, 0.55)' : 'rgba(220, 38, 38, 0.28)';
         ctx.fillRect(p.x + 3, p.y + visualH - 4, fillW, 2.5);
         ctx.restore();
         continue;
@@ -3877,7 +4072,7 @@ export class PlatformerEngine {
         // Faint dashed ghost showing where platform will respawn
         const ghostH = p.def.h <= 44 ? p.def.h + 8 : p.def.h;
         ctx.save();
-        ctx.strokeStyle = 'rgba(17, 17, 17, 0.18)';
+        ctx.strokeStyle = isFinale100 ? 'rgba(245, 243, 238, 0.24)' : 'rgba(17, 17, 17, 0.18)';
         ctx.setLineDash([5, 5]);
         ctx.lineWidth = 1.5;
         ctx.strokeRect(p.def.x + 1, p.def.y + 1, p.def.w - 2, ghostH - 2);
@@ -3888,15 +4083,19 @@ export class PlatformerEngine {
       const popRise = p.revealAnim < 1 ? (1 - p.revealAnim) * (1 - p.revealAnim) * 26 : 0;
 
       if (p.def.kind === 'invisible') {
-        const pulse = 0.14 + 0.12 * Math.sin(this.worldTime * 3.2 + p.x * 0.02);
+        const pulse = (isFinale100 ? 0.24 : 0.14) + 0.12 * Math.sin(this.worldTime * 3.2 + p.x * 0.02);
         const alpha = Math.max(pulse, p.touchGlow * 0.85) * p.revealAnim;
         ctx.save();
-        ctx.strokeStyle = `rgba(17, 17, 17, ${alpha.toFixed(2)})`;
+        ctx.strokeStyle = isFinale100
+          ? `rgba(245, 243, 238, ${alpha.toFixed(2)})`
+          : `rgba(17, 17, 17, ${alpha.toFixed(2)})`;
         ctx.setLineDash([4, 6]);
         ctx.lineWidth = 2;
         ctx.strokeRect(p.x + 1, p.y + popRise + 1, p.w - 2, visualH - 2);
         if (p.touchGlow > 0.05) {
-          ctx.fillStyle = `rgba(17, 17, 17, ${(p.touchGlow * 0.14).toFixed(2)})`;
+          ctx.fillStyle = isFinale100
+            ? `rgba(220, 38, 38, ${(p.touchGlow * 0.22).toFixed(2)})`
+            : `rgba(17, 17, 17, ${(p.touchGlow * 0.14).toFixed(2)})`;
           ctx.fillRect(p.x, p.y + popRise, p.w, visualH);
         }
         ctx.restore();
@@ -3905,9 +4104,9 @@ export class PlatformerEngine {
 
       if (p.def.kind === 'phantom_solid' && p.phantomRevealed) {
         ctx.save();
-        ctx.fillStyle = 'rgba(17, 17, 17, 0.12)';
+        ctx.fillStyle = isFinale100 ? 'rgba(220, 38, 38, 0.14)' : 'rgba(17, 17, 17, 0.12)';
         ctx.fillRect(p.x, p.y + popRise, p.w, visualH);
-        ctx.strokeStyle = 'rgba(17, 17, 17, 0.35)';
+        ctx.strokeStyle = isFinale100 ? 'rgba(245, 243, 238, 0.42)' : 'rgba(17, 17, 17, 0.35)';
         ctx.setLineDash([6, 6]);
         ctx.lineWidth = 1.6;
         ctx.strokeRect(p.x + 1, p.y + popRise + 1, p.w - 2, visualH - 2);
@@ -3948,7 +4147,7 @@ export class PlatformerEngine {
       // Draw moving platform track first
       if (p.def.kind === 'moving') {
         ctx.save();
-        ctx.strokeStyle = 'rgba(17, 17, 17, 0.16)';
+        ctx.strokeStyle = isFinale100 ? 'rgba(220, 38, 38, 0.34)' : 'rgba(17, 17, 17, 0.16)';
         ctx.setLineDash([4, 6]);
         ctx.lineWidth = 2;
         ctx.beginPath();
@@ -3959,7 +4158,7 @@ export class PlatformerEngine {
       }
 
       if (p.def.kind === 'bounce') {
-        ctx.fillStyle = '#111111';
+        ctx.fillStyle = isFinale100 ? '#050507' : '#111111';
         ctx.fillRect(p.x, p.y + oy + 8, p.w, visualH - 8);
         ctx.fillStyle = '#DC2626';
         ctx.fillRect(p.x + 3, p.y + oy, p.w - 6, 8);
@@ -3968,18 +4167,57 @@ export class PlatformerEngine {
       }
 
       const isDarkPlat = Boolean(this.level.spotlightRadius);
+      const isGroundSlab =
+        p.def.h >= 60 &&
+        p.def.kind !== 'moving' &&
+        p.def.kind !== 'crumble' &&
+        p.def.kind !== 'shrink' &&
+        p.def.kind !== 'phase_blink' &&
+        !(p.def.kind === 'fake_drop' && p.dropState === 'dropped');
 
-      // Crisp architectural shadow behind platform
-      ctx.fillStyle = isDarkPlat ? 'rgba(0, 0, 0, 0.45)' : 'rgba(17, 17, 17, 0.11)';
-      ctx.fillRect(p.x + ox + 4, p.y + oy + 4, p.w, visualH);
+      // Slight horizontal bleed on stationary ground slab edges prevents anti-aliased sub-pixel
+      // vertical white cracks between adjacent matte-black floor tiles at fractional camera scroll.
+      let padLeft = 0;
+      let padRight = 0;
+      if (isGroundSlab) {
+        if (p.def.kind === 'pit_stretch' && p.stretchActive) {
+          if ((p.def.stretchEdge ?? 'left') === 'left') {
+            padRight = 0.6;
+          } else {
+            padLeft = 0.6;
+          }
+        } else {
+          padLeft = 0.6;
+          padRight = 0.6;
+        }
+      }
 
-      // Matte black ink platform (or shadowy dark slate in Lights-Out mode so silhouettes read faintly when lit)
-      ctx.fillStyle = isDarkPlat ? '#1C1C22' : '#111111';
-      ctx.fillRect(p.x + ox, p.y + oy, p.w, visualH);
+      // Crisp architectural shadow behind elevated platforms (skip on ground slabs so shadows never cast seams across floors)
+      if (!isGroundSlab) {
+        ctx.fillStyle = isDarkPlat
+          ? 'rgba(0, 0, 0, 0.45)'
+          : isFinale100
+            ? 'rgba(220, 38, 38, 0.22)'
+            : 'rgba(17, 17, 17, 0.11)';
+        ctx.fillRect(p.x + ox + 4, p.y + oy + 4, p.w, visualH);
+      }
 
-      // Subtle walkable-edge hairline
-      ctx.fillStyle = isDarkPlat ? 'rgba(245, 243, 238, 0.34)' : 'rgba(245, 243, 238, 0.22)';
-      ctx.fillRect(p.x + ox, p.y + oy, p.w, 1.5);
+      // Pure matte black ink platform (obsidian pitch-black on Level 100, dark slate in Lights-Out mode)
+      ctx.fillStyle = isDarkPlat ? '#1C1C22' : isFinale100 ? '#050507' : '#111111';
+      ctx.fillRect(p.x + ox - padLeft, p.y + oy, p.w + padLeft + padRight, visualH);
+
+      // Subtle crimson contour on elevated floating blocks ONLY in Level 100 (ground floors remain 100% pure solid black)
+      if (isFinale100 && !isGroundSlab) {
+        ctx.strokeStyle = 'rgba(220, 38, 38, 0.35)';
+        ctx.lineWidth = 1.2;
+        ctx.strokeRect(p.x + ox + 0.6, p.y + oy + 0.6, p.w - 1.2, visualH - 1.2);
+      }
+
+      // Subtle walkable-edge hairline ONLY in Lights-Out darkness levels (floors stay pure solid black)
+      if (isDarkPlat) {
+        ctx.fillStyle = 'rgba(245, 243, 238, 0.34)';
+        ctx.fillRect(p.x + ox, p.y + oy, p.w, 1.5);
+      }
 
       // Surface details per platform mechanic
       if (p.def.kind === 'ice') {
@@ -4075,18 +4313,6 @@ export class PlatformerEngine {
         ctx.lineTo(p.x + ox + p.w * 0.58, p.y + oy + 30);
         ctx.lineTo(p.x + ox + p.w * 0.72, p.y + oy + 62);
         ctx.stroke();
-      } else if (
-        (p.def.kind === 'fake_drop' && !p.def.hideSeam) ||
-        (p.def.kind === 'solid' && p.def.fakeSeamDecoy)
-      ) {
-        ctx.strokeStyle = 'rgba(245, 243, 238, 0.32)';
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        ctx.moveTo(p.x + ox + 1, p.y + oy);
-        ctx.lineTo(p.x + ox + 1, p.y + oy + 16);
-        ctx.moveTo(p.x + ox + p.w - 1, p.y + oy);
-        ctx.lineTo(p.x + ox + p.w - 1, p.y + oy + 16);
-        ctx.stroke();
       } else if (p.def.kind === 'fake_unstable') {
         // Bluff cracks & warning red hairline — looks terrified, never breaks!
         ctx.strokeStyle = p.fakeUnstableTimer > 0 ? '#DC2626' : '#F5F3EE';
@@ -4162,16 +4388,12 @@ export class PlatformerEngine {
         h.def.kind === 'retract_spike'
       ) {
         if (h.def.kind === 'popup_spike') {
-          ctx.fillStyle = '#DC2626';
-          ctx.fillRect(h.x + 2, h.y + h.h - 2, h.w - 4, 2.5);
           if (h.popupExtend <= 0.02) {
             ctx.restore();
             continue;
           }
         }
         if (h.def.kind === 'retract_spike' && h.popupExtend <= 0.02) {
-          ctx.fillStyle = 'rgba(17, 17, 17, 0.25)';
-          ctx.fillRect(h.x + 2, h.y + h.h - 2, h.w - 4, 2);
           ctx.restore();
           continue;
         }
@@ -4272,7 +4494,7 @@ export class PlatformerEngine {
   }
 
   private drawCheckpoints(ctx: CanvasRenderingContext2D): void {
-    const isDark = Boolean(this.level.spotlightRadius);
+    const isDark = Boolean(this.level.spotlightRadius) || this.isFinale100Theme();
     const poleInk = isDark ? '#D6D3D1' : '#111111';
     for (const cp of this.checkpoints) {
       if (!cp.revealed) continue;
@@ -4335,6 +4557,7 @@ export class PlatformerEngine {
 
   private drawExits(ctx: CanvasRenderingContext2D): void {
     const isDark = Boolean(this.level.spotlightRadius);
+    const isFinale100 = this.isFinale100Theme();
     for (const ex of this.exits) {
       if (!ex.revealed || ex.vanished) continue;
       const doorW = 46;
@@ -4342,10 +4565,29 @@ export class PlatformerEngine {
       const popRise = ex.revealAnim < 1 ? (1 - ex.revealAnim) * (1 - ex.revealAnim) * 22 : 0;
       const dx = ex.x - doorW / 2;
       const dy = ex.y - doorH + popRise;
+      const isGildedFinal = isFinale100 && !ex.def.fake;
 
       ctx.save();
       if (ex.revealAnim < 1) {
         ctx.globalAlpha = Math.max(0.2, ex.revealAnim);
+      }
+
+      // Pulsing golden aura behind the true Level 100 finale gate
+      if (isGildedFinal && !ex.becameWall) {
+        const pulse = 0.5 + 0.5 * Math.sin(this.worldTime * 4.2);
+        const halo = ctx.createRadialGradient(
+          ex.x,
+          dy + doorH * 0.5,
+          10,
+          ex.x,
+          dy + doorH * 0.5,
+          56 + pulse * 14,
+        );
+        halo.addColorStop(0, `rgba(234, 179, 8, ${0.32 + pulse * 0.14})`);
+        halo.addColorStop(0.55, `rgba(220, 38, 38, ${0.14 + pulse * 0.06})`);
+        halo.addColorStop(1, 'rgba(234, 179, 8, 0)');
+        ctx.fillStyle = halo;
+        ctx.fillRect(ex.x - 74, dy - 38, 148, doorH + 76);
       }
 
       // Running legs if moving or retreating!
@@ -4354,7 +4596,7 @@ export class PlatformerEngine {
       );
       if (ex.moving || isRetreating) {
         const swing = Math.sin(ex.legCycle) * 10;
-        ctx.strokeStyle = isDark ? '#D6D3D1' : '#111111';
+        ctx.strokeStyle = isGildedFinal ? '#EAB308' : isFinale100 ? '#F5F3EE' : isDark ? '#D6D3D1' : '#111111';
         ctx.lineWidth = 3;
         ctx.lineCap = 'round';
         ctx.beginPath();
@@ -4372,10 +4614,13 @@ export class PlatformerEngine {
 
       if (ex.becameWall) {
         // Doorway betrayed the player and bricked itself into a solid wall!
-        ctx.fillStyle = '#111111';
+        ctx.fillStyle = isFinale100 ? '#09090B' : '#111111';
         ctx.fillRect(dx, dy, doorW, doorH);
-        ctx.strokeStyle = '#F5F3EE';
+        ctx.strokeStyle = isFinale100 ? '#DC2626' : '#F5F3EE';
         ctx.lineWidth = 1.4;
+        if (isFinale100) {
+          ctx.strokeRect(dx + 0.75, dy + 0.75, doorW - 1.5, doorH - 1.5);
+        }
         for (let row = 0; row < 4; row++) {
           const ry = dy + 14 + row * 14;
           ctx.beginPath();
@@ -4390,12 +4635,24 @@ export class PlatformerEngine {
       } else {
         // Doorway frame
         ctx.fillStyle = isBustedFake
-          ? '#D6D1C7'
-          : isDark
-            ? '#2F2F38'
-            : '#111111';
+          ? isFinale100
+            ? '#272022'
+            : '#D6D1C7'
+          : isFinale100
+            ? '#09090B'
+            : isDark
+              ? '#2F2F38'
+              : '#111111';
         ctx.fillRect(dx, dy, doorW, doorH);
-        if (isDark && !isBustedFake) {
+        if (isGildedFinal && !isBustedFake) {
+          ctx.strokeStyle = '#EAB308';
+          ctx.lineWidth = 2;
+          ctx.strokeRect(dx + 1, dy + 1, doorW - 2, doorH - 2);
+        } else if (isFinale100 && !isBustedFake) {
+          ctx.strokeStyle = 'rgba(220, 38, 38, 0.72)';
+          ctx.lineWidth = 1.6;
+          ctx.strokeRect(dx + 0.8, dy + 0.8, doorW - 1.6, doorH - 1.6);
+        } else if (isDark && !isBustedFake) {
           ctx.strokeStyle = 'rgba(245, 243, 238, 0.42)';
           ctx.lineWidth = 1.5;
           ctx.strokeRect(dx + 0.75, dy + 0.75, doorW - 1.5, doorH - 1.5);
@@ -4403,10 +4660,16 @@ export class PlatformerEngine {
 
         // Inner doorway recess
         ctx.fillStyle = isBustedFake
-          ? '#F5F3EE'
-          : isDark
-            ? '#121217'
-            : '#262626';
+          ? isFinale100
+            ? '#1A1617'
+            : '#F5F3EE'
+          : isGildedFinal
+            ? '#1C1608'
+            : isFinale100
+              ? '#181416'
+              : isDark
+                ? '#121217'
+                : '#262626';
         ctx.fillRect(dx + 5, dy + 5, doorW - 10, doorH - 5);
 
         // Door handle or lock bars
@@ -4421,9 +4684,9 @@ export class PlatformerEngine {
             ctx.stroke();
           }
         } else if (!isBustedFake) {
-          ctx.fillStyle = '#F5F3EE';
+          ctx.fillStyle = isGildedFinal ? '#EAB308' : '#F5F3EE';
           ctx.beginPath();
-          ctx.arc(dx + doorW - 12, dy + doorH * 0.56, 3.2, 0, Math.PI * 2);
+          ctx.arc(dx + doorW - 12, dy + doorH * 0.56, isGildedFinal ? 3.8 : 3.2, 0, Math.PI * 2);
           ctx.fill();
         } else {
           // Big crimson X stamped over fake exit once busted
@@ -4437,13 +4700,27 @@ export class PlatformerEngine {
           ctx.stroke();
         }
 
-        // Crisp EXIT / LOCKED countdown plaque above door
+        // Crisp EXIT / FINAL EXIT / LOCKED countdown plaque above door
         const remLock = ex.def.lockedUntilSeconds ? Math.max(0, ex.def.lockedUntilSeconds - this.levelTime) : 0;
-        ctx.fillStyle = isTimedLocked ? '#DC2626' : isDark ? '#D6D3D1' : '#111111';
+        ctx.fillStyle = isTimedLocked
+          ? '#DC2626'
+          : isGildedFinal && !isBustedFake
+            ? '#EAB308'
+            : isFinale100
+              ? '#F5F3EE'
+              : isDark
+                ? '#D6D3D1'
+                : '#111111';
         ctx.font = '700 10px "JetBrains Mono", monospace';
         ctx.textAlign = 'center';
         ctx.fillText(
-          isBustedFake ? 'NOPE' : isTimedLocked ? `LOCK ${remLock.toFixed(1)}s` : 'EXIT',
+          isBustedFake
+            ? 'NOPE'
+            : isTimedLocked
+              ? `LOCK ${remLock.toFixed(1)}s`
+              : isGildedFinal
+                ? 'FINAL EXIT'
+                : 'EXIT',
           ex.x,
           dy - 7,
         );
@@ -4470,13 +4747,15 @@ export class PlatformerEngine {
       const bx = s.def.x - boardW / 2;
       const by = s.def.y - 54;
 
+      const isFinale100 = this.isFinale100Theme();
+
       // Wooden ink post
-      ctx.fillStyle = '#111111';
+      ctx.fillStyle = isFinale100 ? '#DC2626' : '#111111';
       ctx.fillRect(s.def.x - 2, by + boardH, 4, 26);
 
       // Signboard
-      ctx.fillStyle = '#FFFFFF';
-      ctx.strokeStyle = '#111111';
+      ctx.fillStyle = isFinale100 ? '#0E0B0C' : '#FFFFFF';
+      ctx.strokeStyle = isFinale100 ? '#DC2626' : '#111111';
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.roundRect(bx, by, boardW, boardH, 4);
@@ -4484,7 +4763,7 @@ export class PlatformerEngine {
       ctx.stroke();
 
       // Label text
-      ctx.fillStyle = '#111111';
+      ctx.fillStyle = isFinale100 ? '#F5F3EE' : '#111111';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(label, s.def.x, by + boardH / 2 + 0.5);
@@ -4644,7 +4923,7 @@ export class PlatformerEngine {
 
         if (sw.def.label && !sw.pressed) {
           ctx.font = '700 9px "JetBrains Mono", monospace';
-          ctx.fillStyle = '#57534E';
+          ctx.fillStyle = this.isFinale100Theme() ? '#F5F3EE' : '#57534E';
           ctx.textAlign = 'center';
           ctx.textBaseline = 'top';
           ctx.fillText(sw.def.label, x + w / 2, y + capH + 4);
@@ -4667,7 +4946,7 @@ export class PlatformerEngine {
         // Optional micro-label above switch
         if (sw.def.label && !sw.pressed) {
           ctx.font = '700 9px "JetBrains Mono", monospace';
-          ctx.fillStyle = '#57534E';
+          ctx.fillStyle = this.isFinale100Theme() ? '#F5F3EE' : '#57534E';
           ctx.textAlign = 'center';
           ctx.textBaseline = 'bottom';
           ctx.fillText(sw.def.label, x + w / 2, y - baseH - capH - 4);
@@ -4730,7 +5009,7 @@ export class PlatformerEngine {
     const lean = isRunning ? (this.vx / BASE_MOVE_SPEED) * 0.14 : 0;
     ctx.rotate(lean);
 
-    const isDark = Boolean(this.level.spotlightRadius);
+    const isDark = Boolean(this.level.spotlightRadius) || this.isFinale100Theme();
     const inkStroke = isDark ? '#F5F3EE' : '#111111';
     const headFill = isDark ? '#141418' : '#FFFFFF';
 

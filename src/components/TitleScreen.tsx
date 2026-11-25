@@ -147,11 +147,6 @@ export function TitleScreen({
       ctx.fillRect(0, floorY, 536, 120);
       ctx.fillRect(640, floorY, 340, 120);
 
-      // Crisp paper edge sheen on floor
-      ctx.fillStyle = 'rgba(245, 243, 238, 0.22)';
-      ctx.fillRect(0, floorY, 536, 1.5);
-      ctx.fillRect(640, floorY, 340, 1.5);
-
       // Cheeky floating crumble ledge over gap (slightly thicker visual height)
       const crumbleBob = Math.sin(t * 2.2) * 2.5;
       const crumbleH = 26;
@@ -167,12 +162,11 @@ export function TitleScreen({
       ctx.lineTo(576, floorY + crumbleBob + crumbleH);
       ctx.stroke();
 
-      // Sneaky pop-up spike pulsing subtly
+      // Sneaky pop-up spike — completely hidden until it springs up
       const cycle = t % 8.4;
       const spikeUp = cycle > 2.6 && cycle < 4.1 ? Math.min(1, (cycle - 2.6) * 5) : 0;
-      ctx.fillStyle = '#DC2626';
-      ctx.fillRect(722, floorY - 2, 42, 2.5);
       if (spikeUp > 0.05) {
+        ctx.fillStyle = '#DC2626';
         const sh = 22 * spikeUp;
         for (let i = 0; i < 3; i++) {
           const sx = 722 + i * 14;

@@ -76,7 +76,8 @@ export type PlatformKind =
   | 'phase_blink'
   | 'fake_unstable'
   | 'look_away'
-  | 'follow_player';
+  | 'follow_player'
+  | 'pit_stretch';
 
 export interface PlatformDef {
   id: string;
@@ -119,6 +120,12 @@ export interface PlatformDef {
   // For shrink platforms (pixels/sec removed from total width once stepped on)
   shrinkRate?: number;
   minWidth?: number;
+  // For pit_stretch platforms (disguised solid floor eaten rapidly by an adjacent pit on landing/trigger)
+  stretchEdge?: 'left' | 'right'; // which edge erodes ('left' = pit behind chases right; 'right' = pit ahead eats left)
+  stretchSpeed?: number; // px/s (default 210; always < BASE_MOVE_SPEED 290 so sprinting beats it)
+  maxStretch?: number; // max px eaten (default: full platform width)
+  stretchDelay?: number; // brief reaction beat in seconds (default 0.04)
+  stretchTriggerX?: number; // optional X trigger in addition to landing
   // For proximity_shift platforms (slides away or rises when player approaches)
   shiftX?: number;
   shiftY?: number;
@@ -300,6 +307,10 @@ export interface LevelDef {
   subtitle: string;
   /** Distinct primary task/objective unique to this level. */
   objective?: string;
+  /** Optional custom visual presentation theme resolved by the level loader. */
+  visualTheme?: 'standard' | 'dark' | 'finale_100';
+  /** Marks the climactic final-boss stage (Level 100). */
+  isFinalBoss?: boolean;
   worldWidth: number;
   worldHeight: number;
   spawn: { x: number; y: number };

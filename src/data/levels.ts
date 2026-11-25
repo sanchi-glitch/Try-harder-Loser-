@@ -1,5 +1,6 @@
 import type { LevelDef } from '../types/game';
 import { EXTENDED_CHAPTERS, EXTENDED_LEVELS } from './levelsExtended';
+import { buildLevel100Finale } from './level100';
 
 /**
  * 100 Handcrafted & Distinct Ragebait Levels across 20 Chapters.
@@ -65,11 +66,11 @@ const CORE_LEVELS: LevelDef[] = [
         maxX: 945,
         x: 845,
         y: 334,
-        text: 'That sign lied — jump before the floor seam.',
+        text: 'That sign lied — jump right before the sign!',
         minDeaths: 2,
       },
     ],
-    adaptiveClue: { x: 760, y: 355, text: 'Jump early before the seam!' },
+    adaptiveClue: { x: 760, y: 355, text: 'Jump early before the sign!' },
   },
 
   {
@@ -139,7 +140,7 @@ const CORE_LEVELS: LevelDef[] = [
         maxX: 1010,
         x: 855,
         y: 332,
-        text: 'Marked tile is safe — jump the innocent tile after it.',
+        text: 'The sign tile is solid — jump the floor RIGHT after it.',
         minDeaths: 2,
       },
       {
@@ -163,7 +164,7 @@ const CORE_LEVELS: LevelDef[] = [
         causes: ['popup_spike'],
       },
     ],
-    adaptiveClue: { x: 785, y: 350, text: 'Stand on the marked tile — jump the NEXT one!' },
+    adaptiveClue: { x: 785, y: 350, text: 'Stand under the sign — jump the floor RIGHT after it!' },
   },
 
   {
@@ -334,11 +335,24 @@ const CORE_LEVELS: LevelDef[] = [
       // 100% hidden new track revealed only when fake exit vanishes!
       { id: 'p3_hid', x: 1065, y: 420, w: 365, h: 140, kind: 'solid', revealOnTriggerId: 'c1_boss' },
       { id: 'c1_hid', x: 1540, y: 395, w: 110, h: 24, kind: 'crumble', crumbleDelay: 0.42, respawnDelay: 2.2, revealOnTriggerId: 'c1_boss' },
-      { id: 'p4_hid', x: 1755, y: 420, w: 305, h: 140, kind: 'solid', revealOnTriggerId: 'c1_boss' },
+      {
+        id: 'p4_hid',
+        x: 1755,
+        y: 420,
+        w: 155,
+        h: 140,
+        kind: 'pit_stretch',
+        stretchEdge: 'left',
+        stretchSpeed: 185,
+        maxStretch: 155,
+        prankMessage: 'THE PIT IS STRETCHING — SPRINT!',
+        revealOnTriggerId: 'c1_boss',
+      },
+      { id: 'p4_safe', x: 1910, y: 420, w: 150, h: 140, kind: 'solid', revealOnTriggerId: 'c1_boss' },
     ],
     hazards: [
       { id: 'saw1_hid', x: 1280, y: 402, w: 36, h: 36, kind: 'saw', moveX: 0, moveY: 85, speed: 2.2, revealOnTriggerId: 'c1_boss' },
-      { id: 'h1_hid', x: 1815, y: 396, w: 46, h: 24, kind: 'popup_spike', dir: 'up', triggerX: 1795, triggerRadius: 65, telegraphTime: 0.2, revealOnTriggerId: 'c1_boss' },
+      { id: 'h1_hid', x: 1835, y: 396, w: 46, h: 24, kind: 'popup_spike', dir: 'up', triggerX: 1815, triggerRadius: 65, telegraphTime: 0.2, revealOnTriggerId: 'c1_boss' },
     ],
     checkpoints: [{ id: 'cp1_hid', x: 1165, y: 420, fake: false, revealOnTriggerId: 'c1_boss' }],
     signs: [
@@ -399,7 +413,7 @@ const CORE_LEVELS: LevelDef[] = [
         causes: ['popup_spike'],
       },
     ],
-    adaptiveClue: { x: 1755, y: 350, text: 'Watch the seam right after landing!' },
+    adaptiveClue: { x: 1755, y: 350, text: 'Sprint as the pit stretches and hop the hidden spike!' },
   },
 
   // =========================================================================
@@ -553,7 +567,19 @@ const CORE_LEVELS: LevelDef[] = [
       { id: 'p1', x: 0, y: 420, w: 220, h: 140, kind: 'solid' },
       { id: 'cv1', x: 220, y: 420, w: 260, h: 140, kind: 'conveyor', conveyorSpeed: 155, disguised: true },
       { id: 'cv2', x: 605, y: 400, w: 240, h: 160, kind: 'conveyor', conveyorSpeed: -145, disguised: true },
-      { id: 'p2', x: 960, y: 420, w: 260, h: 140, kind: 'solid' },
+      { id: 'p2', x: 960, y: 420, w: 150, h: 140, kind: 'solid' },
+      {
+        id: 'p2_stretch',
+        x: 1110,
+        y: 420,
+        w: 110,
+        h: 140,
+        kind: 'pit_stretch',
+        stretchEdge: 'right',
+        stretchSpeed: 175,
+        maxStretch: 92,
+        prankMessage: 'THE PIT AHEAD IS GROWING — JUMP EARLY!',
+      },
       { id: 'cv3', x: 1340, y: 395, w: 210, h: 24, kind: 'conveyor', conveyorSpeed: 170 },
       { id: 'cv4', x: 1670, y: 420, w: 450, h: 140, kind: 'conveyor', conveyorSpeed: -135, disguised: true },
     ],
@@ -848,7 +874,7 @@ const CORE_LEVELS: LevelDef[] = [
       },
       { id: 'e_real', x: 2265, y: 410, revealOnTriggerId: 'twist_15' },
     ],
-    adaptiveClue: { x: 2060, y: 345, text: 'Hop the red seam right as you land!' },
+    adaptiveClue: { x: 2060, y: 345, text: 'Hop the hidden spike right as you land!' },
   },
 
   // =========================================================================
@@ -1108,7 +1134,7 @@ const CORE_LEVELS: LevelDef[] = [
       },
       { id: 'e_real', x: 2465, y: 420, revealOnTriggerId: 'rq_b' },
     ],
-    adaptiveClue: { x: 2110, y: 350, text: 'Bait the crusher then jump the seam!' },
+    adaptiveClue: { x: 2110, y: 350, text: 'Bait the crusher then jump the hidden spike!' },
   },
 
   // =========================================================================
@@ -1135,7 +1161,19 @@ const CORE_LEVELS: LevelDef[] = [
       { id: 'p2', x: 1015, y: 395, w: 280, h: 165, kind: 'solid' },
       { id: 'sh2', x: 1405, y: 395, w: 120, h: 22, kind: 'shrink', shrinkRate: 110, respawnDelay: 1.9 },
       { id: 'c3', x: 1640, y: 380, w: 96, h: 22, kind: 'crumble', crumbleDelay: 0.34, respawnDelay: 1.9 },
-      { id: 'p3', x: 1850, y: 410, w: 390, h: 150, kind: 'solid' },
+      {
+        id: 'p3_stretch',
+        x: 1850,
+        y: 410,
+        w: 245,
+        h: 150,
+        kind: 'pit_stretch',
+        stretchEdge: 'left',
+        stretchSpeed: 205,
+        maxStretch: 245,
+        prankMessage: 'RUN! THE PIT IS CHASING YOU IN HEAVY GRAVITY!',
+      },
+      { id: 'p3_end', x: 2095, y: 410, w: 145, h: 150, kind: 'solid' },
       { id: 'ceil_flip21', x: 1875, y: 226, w: 235, h: 22, kind: 'solid', revealOnTriggerId: 'lv21_grav_flip' },
     ],
     hazards: [
@@ -1347,7 +1385,7 @@ const CORE_LEVELS: LevelDef[] = [
         ],
       },
     ],
-    adaptiveClue: { x: 2230, y: 350, text: 'Two pop-up seams hide along the door chase!' },
+    adaptiveClue: { x: 2230, y: 350, text: 'Two hidden pop-up spikes ambush the door chase!' },
   },
 
   // =========================================================================
@@ -1603,14 +1641,14 @@ const CORE_LEVELS: LevelDef[] = [
         ],
       },
     ],
-    adaptiveClue: { x: 2600, y: 340, text: 'Jump BOTH pop-up seams while chasing the door!' },
+    adaptiveClue: { x: 2600, y: 340, text: 'Jump BOTH hidden pop-up spikes while chasing the door!' },
   },
 ];
 
 const CORE_LEVEL_OBJECTIVES: Record<number, string> = {
   1: 'Spot the sudden fake-floor drop and leap to the opening exit.',
   2: 'Resist the shiny decoy coin and jump over the hidden shatter-tile trap.',
-  3: 'Chase the sprinting exit door across pop-up seams without mistiming.',
+  3: 'Chase the sprinting exit door across hidden pop-up spikes without mistiming.',
   4: 'Master zero-friction ice braking before the edge spikes.',
   5: 'Trigger the hidden Act 2 behind the Chapter 1 fake finish line.',
   6: 'Sprint across shrinking stones before they vanish beneath your feet.',
@@ -1644,7 +1682,12 @@ const CHAPTER_TITLE_BY_ID = new Map<number, string>(
   CHAPTERS.map((c) => [c.id, c.title]),
 );
 
+const LEVEL_100_FINALE: LevelDef = buildLevel100Finale();
+
 export const LEVELS: LevelDef[] = [...CORE_LEVELS, ...EXTENDED_LEVELS].map((lvl) => {
+  if (lvl.id === 100) {
+    return LEVEL_100_FINALE;
+  }
   const chapterTitle = CHAPTER_TITLE_BY_ID.get(lvl.chapter) ?? lvl.chapterTitle;
   const objective = lvl.objective ?? CORE_LEVEL_OBJECTIVES[lvl.id];
   // Strictly strip any adaptiveClue data past Level 50 (Zero Hints on Levels 51–100)
@@ -1656,5 +1699,8 @@ export const LEVELS: LevelDef[] = [...CORE_LEVELS, ...EXTENDED_LEVELS].map((lvl)
 });
 
 export function getLevelById(id: number): LevelDef {
+  if (id === 100) {
+    return LEVEL_100_FINALE;
+  }
   return LEVELS.find((l) => l.id === id) ?? LEVELS[0];
 }

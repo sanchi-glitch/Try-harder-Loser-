@@ -58,7 +58,7 @@ const LEVEL_HINT_ZONES: Record<number, ObstacleHintZone[]> = {
       minX: 710,
       maxX: 1020,
       centerX: 865,
-      clueText: 'Stop fearing yesterday’s trauma. The marked tile holds; its quiet neighbor betrays.',
+      clueText: 'Stop fearing yesterday’s trauma. The sign tile holds; the quiet floor right after it betrays.',
     },
     {
       id: 'l2_ceil',
@@ -135,7 +135,7 @@ const LEVEL_HINT_ZONES: Record<number, ObstacleHintZone[]> = {
       minX: 1140,
       maxX: 1740,
       centerX: 1410,
-      clueText: 'Counter-tap left to slow down on ice, then clear the red seam and final spike.',
+      clueText: 'Counter-tap left to slow down on ice, then clear the hidden pop-up spike and final blade.',
     },
   ],
   5: [
@@ -166,7 +166,7 @@ const LEVEL_HINT_ZONES: Record<number, ObstacleHintZone[]> = {
       minX: 1765,
       maxX: 1925,
       centerX: 1838,
-      clueText: 'Welcome to solid land—now jump immediately over the crimson seam.',
+      clueText: 'Keep sprinting as the pit stretches behind you—and jump immediately over the hidden pop-up spike.',
       causes: ['popup_spike'],
     },
   ],
@@ -237,7 +237,7 @@ const LEVEL_HINT_ZONES: Record<number, ObstacleHintZone[]> = {
       minX: 1850,
       maxX: 2040,
       centerX: 1935,
-      clueText: 'Touch down on the upper ledge ready to hop the crimson floor seam.',
+      clueText: 'Touch down on the upper ledge ready to hop the hidden pop-up spike.',
       causes: ['popup_spike'],
     },
   ],
@@ -285,7 +285,7 @@ const LEVEL_HINT_ZONES: Record<number, ObstacleHintZone[]> = {
       minX: 1750,
       maxX: 2120,
       centerX: 1905,
-      clueText: 'Short-hop the crimson seam before chasing the scooting door.',
+      clueText: 'Short-hop the hidden pop-up spike before chasing the scooting door.',
     },
   ],
   11: [
@@ -411,7 +411,7 @@ const LEVEL_HINT_ZONES: Record<number, ObstacleHintZone[]> = {
       minX: 1200,
       maxX: 2010,
       centerX: 1620,
-      clueText: 'Chain both cracked stones, then leap the crimson seam right after landing.',
+      clueText: 'Chain both cracked stones, then leap the hidden pop-up spike right after landing.',
     },
   ],
   17: [
@@ -427,7 +427,7 @@ const LEVEL_HINT_ZONES: Record<number, ObstacleHintZone[]> = {
       minX: 1210,
       maxX: 1560,
       centerX: 1350,
-      clueText: 'Tailwind launches you fast—vault the dropping seam without overshooting.',
+      clueText: 'Tailwind launches you fast—vault the hidden dropping floor without overshooting.',
     },
     {
       id: 'l17_crusher_popup',
@@ -457,7 +457,7 @@ const LEVEL_HINT_ZONES: Record<number, ObstacleHintZone[]> = {
       minX: 1120,
       maxX: 1785,
       centerX: 1460,
-      clueText: 'Step on LIGHTS for a power-surge flash, hop the red seam, and time the blinking bridge.',
+      clueText: 'Step on LIGHTS for a power-surge flash, hop the hidden spike, and time the blinking bridge.',
     },
     {
       id: 'l18_dark_finale',
@@ -510,7 +510,7 @@ const LEVEL_HINT_ZONES: Record<number, ObstacleHintZone[]> = {
       minX: 2020,
       maxX: 2420,
       centerX: 2215,
-      clueText: 'Bait the sky-crusher to slam first, then vault the crimson floor seam.',
+      clueText: 'Bait the sky-crusher to slam first, then vault the hidden pop-up spike.',
     },
   ],
   21: [
@@ -550,14 +550,14 @@ const LEVEL_HINT_ZONES: Record<number, ObstacleHintZone[]> = {
       minX: 740,
       maxX: 960,
       centerX: 860,
-      clueText: 'Déjà vu works best when you don’t forget Level 1. Jump the marked seam.',
+      clueText: 'Déjà vu works best when you don’t forget Level 1. Jump right before the sign.',
     },
     {
       id: 'l22_second_half',
       minX: 1200,
       maxX: 2340,
       centerX: 1760,
-      clueText: 'Watch the conveyor speed under the saw, then chain the cracked stone, shuttle, and final seam.',
+      clueText: 'Watch the conveyor speed under the saw, then chain the cracked stone, shuttle, and final hidden spike.',
     },
   ],
   23: [
@@ -580,7 +580,7 @@ const LEVEL_HINT_ZONES: Record<number, ObstacleHintZone[]> = {
       minX: 1720,
       maxX: 2320,
       centerX: 2040,
-      clueText: 'Bait each overhead crusher one at a time, then hop the crimson seam before the door.',
+      clueText: 'Bait each overhead crusher one at a time, then hop the hidden pop-up spike before the door.',
     },
   ],
   24: [
@@ -626,7 +626,7 @@ const LEVEL_HINT_ZONES: Record<number, ObstacleHintZone[]> = {
       minX: 2180,
       maxX: 2640,
       centerX: 2375,
-      clueText: 'Stop tunnel-visioning on the fleeing door—two red seams hide along the chase.',
+      clueText: 'Stop tunnel-visioning on the fleeing door—two hidden pop-up spikes wait along the chase.',
     },
   ],
   26: [
@@ -665,14 +665,14 @@ const LEVEL_HINT_ZONES: Record<number, ObstacleHintZone[]> = {
       minX: 1490,
       maxX: 1940,
       centerX: 1710,
-      clueText: 'Leap the loose seam—then remember Left & Right swap inside the red border!',
+      clueText: 'Leap the hidden trap floor—then remember Left & Right swap inside the red border!',
     },
     {
       id: 'l27_inverted_end',
       minX: 1940,
       maxX: 2480,
       centerX: 2195,
-      clueText: 'Skip the shiny trap trophy and steer reversed cleanly over the floor saw and final seam.',
+      clueText: 'Skip the shiny trap trophy and steer reversed cleanly over the floor saw and final hidden spike.',
     },
   ],
   28: [
@@ -741,7 +741,7 @@ const LEVEL_HINT_ZONES: Record<number, ObstacleHintZone[]> = {
       minX: 2580,
       maxX: 3040,
       centerX: 2770,
-      clueText: 'Skip the fake crown—two hidden crimson seams wait along the fleeing door’s path.',
+      clueText: 'Skip the fake crown—two hidden pop-up spikes wait along the fleeing door’s path.',
     },
   ],
   31: [
@@ -757,7 +757,7 @@ const LEVEL_HINT_ZONES: Record<number, ObstacleHintZone[]> = {
       minX: 1650,
       maxX: 2500,
       centerX: 2050,
-      clueText: 'Brake on the final ice strip before stepping onto the hidden crimson seam.',
+      clueText: 'Brake on the final ice strip before stepping onto the hidden pop-up spike.',
     },
   ],
   32: [
@@ -853,7 +853,7 @@ const LEVEL_HINT_ZONES: Record<number, ObstacleHintZone[]> = {
       minX: 1450,
       maxX: 2650,
       centerX: 2050,
-      clueText: 'Stay low under roof #3 to hop the red seam, then tease the falling slab before finishing.',
+      clueText: 'Stay low under roof #3 to hop the hidden pop-up spike, then tease the falling slab before finishing.',
     },
   ],
   38: [
@@ -901,7 +901,7 @@ const LEVEL_HINT_ZONES: Record<number, ObstacleHintZone[]> = {
       minX: 1050,
       maxX: 3400,
       centerX: 2200,
-      clueText: 'Time the saw and shuttle, bait the conveyor crusher, and leap both crimson seams chasing the door.',
+      clueText: 'Time the saw and shuttle, bait the conveyor crusher, and leap both hidden pop-up spikes chasing the door.',
     },
   ],
   41: [
@@ -933,7 +933,7 @@ const LEVEL_HINT_ZONES: Record<number, ObstacleHintZone[]> = {
       minX: 1050,
       maxX: 2450,
       centerX: 1650,
-      clueText: 'Tailwind flings you forward—vault the loose floor seam and hold left to brake before the crusher and saw.',
+      clueText: 'Tailwind flings you forward—vault the hidden dropping floor and hold left to brake before the crusher and saw.',
     },
   ],
   43: [
@@ -1013,7 +1013,7 @@ const LEVEL_HINT_ZONES: Record<number, ObstacleHintZone[]> = {
       minX: 1600,
       maxX: 2550,
       centerX: 2050,
-      clueText: 'Control your slide onto the final icy strip and jump early over the crimson seam.',
+      clueText: 'Control your slide onto the final icy strip and jump early over the hidden pop-up spike.',
     },
   ],
   48: [
@@ -1022,7 +1022,7 @@ const LEVEL_HINT_ZONES: Record<number, ObstacleHintZone[]> = {
       minX: 200,
       maxX: 1200,
       centerX: 560,
-      clueText: 'Ignore the retracting decoy spike—save your hop for the real pop-up seam behind it.',
+      clueText: 'Keep sprinting as the pit stretches behind you—and watch for sudden floor traps.',
     },
     {
       id: 'l48_slide',
@@ -1061,7 +1061,7 @@ const LEVEL_HINT_ZONES: Record<number, ObstacleHintZone[]> = {
       minX: 1150,
       maxX: 3550,
       centerX: 2250,
-      clueText: 'Control your slide on the icy stretch, ride the shuttle, bait the belt crusher, and jump both red seams.',
+      clueText: 'Control your slide on the icy stretch, ride the shuttle, bait the belt crusher, and jump both hidden spikes.',
     },
   ],
 };
@@ -1077,7 +1077,7 @@ function buildFallbackClue(cause: DeathCause, levelDef: LevelDef): string {
     case 'falling_block':
       return 'Angry ceiling bricks crave attention. Step near to bait them, then step back.';
     case 'fake_drop':
-      return 'Solid ink isn’t always loyal. Watch for faint seams—or suspiciously quiet neighbors.';
+      return 'Solid black ink isn’t always loyal—the floor can drop or stretch right beneath your feet.';
     case 'sweeper':
       return 'Standing around invites the sweeper. Keep moving and hop cleanly over it.';
     case 'pit':

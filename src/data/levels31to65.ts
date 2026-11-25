@@ -324,8 +324,21 @@ export const LEVELS_31_TO_65: LevelDef[] = [
       { id: 'ceil_a', x: 260, y: 96, w: 460, h: 24, kind: 'solid' },
       { id: 'ceil_b', x: 865, y: 120, w: 310, h: 24, kind: 'solid' },
       { id: 'ceil_c', x: 1320, y: 96, w: 420, h: 24, kind: 'solid' },
-      // Return floor for finale
-      { id: 'p_end', x: 1600, y: 410, w: 780, h: 150, kind: 'solid' },
+      // Return floor for finale — safe landing + checkpoint, then sudden stretching pit!
+      { id: 'p_end_land', x: 1600, y: 410, w: 210, h: 150, kind: 'solid' },
+      {
+        id: 'p_end_stretch',
+        x: 1810,
+        y: 410,
+        w: 340,
+        h: 150,
+        kind: 'pit_stretch',
+        stretchEdge: 'left',
+        stretchSpeed: 215,
+        maxStretch: 340,
+        prankMessage: 'FLOOR DISAPPEARING BEHIND YOU — SPRINT!',
+      },
+      { id: 'p_end_exit', x: 2150, y: 410, w: 230, h: 150, kind: 'solid' },
     ],
     switches: [
       {
@@ -1048,7 +1061,19 @@ export const LEVELS_31_TO_65: LevelDef[] = [
       { id: 'p2', x: 1055, y: 405, w: 360, h: 155, kind: 'solid' },
       // Tailwind slingshot section + phantom wall feint!
       { id: 'sh2', x: 1575, y: 382, w: 108, h: 22, kind: 'shrink', shrinkRate: 120, respawnDelay: 1.75 },
-      { id: 'p3', x: 1845, y: 405, w: 775, h: 155, kind: 'solid' },
+      {
+        id: 'p3_stretch',
+        x: 1845,
+        y: 405,
+        w: 535,
+        h: 155,
+        kind: 'pit_stretch',
+        stretchEdge: 'left',
+        stretchSpeed: 225,
+        maxStretch: 535,
+        prankMessage: 'TAILWIND + STRETCHING PIT! DON’T HESITATE!',
+      },
+      { id: 'p3_end', x: 2380, y: 405, w: 240, h: 155, kind: 'solid' },
       { id: 'ph_wall48', x: 2145, y: 275, w: 46, h: 130, kind: 'phantom_solid', prankMessage: 'HOLLOW WALL! RIDE THE WIND RIGHT THROUGH IT!' },
     ],
     hazards: [
@@ -1793,7 +1818,19 @@ export const LEVELS_31_TO_65: LevelDef[] = [
       { id: 'p2', x: 875, y: 405, w: 460, h: 155, kind: 'solid' },
       { id: 'c1', x: 1465, y: 380, w: 86, h: 22, kind: 'crumble', crumbleDelay: 0.27, respawnDelay: 1.6 },
       { id: 'eye1', x: 1680, y: 356, w: 102, h: 22, kind: 'look_away' },
-      { id: 'p3_pre', x: 1910, y: 405, w: 295, h: 155, kind: 'solid' },
+      {
+        id: 'p3_pre',
+        x: 1910,
+        y: 405,
+        w: 190,
+        h: 155,
+        kind: 'pit_stretch',
+        stretchEdge: 'left',
+        stretchSpeed: 220,
+        maxStretch: 190,
+        prankMessage: 'PIT STRETCHING! OUTRUN THE CRUSHER AND LEAP INTO THE DOOR!',
+      },
+      { id: 'p3_lip', x: 2100, y: 405, w: 105, h: 155, kind: 'solid' },
       // Concealed fake-drop directly under the REAL exit! Must jump into the doorway!
       { id: 'fd_under_exit', x: 2205, y: 405, w: 135, h: 155, kind: 'fake_drop', hideSeam: true, triggerDist: 44, dropDistance: 250, prankMessage: 'FLOOR UNDER THE EXIT DROPPED! JUMP INTO THE DOOR!' },
       { id: 'p3_tail', x: 2340, y: 405, w: 100, h: 155, kind: 'solid' },

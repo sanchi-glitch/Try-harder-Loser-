@@ -19,9 +19,9 @@ export const SARCASTIC_LEVEL_HINTS: Readonly<Record<number, readonly string[]>> 
   ],
   2: [
     'Ooh, shiny trophy! Still falling for obvious bait, huh?',
-    'Still scared of Level 1’s marked tile? Look at its quiet neighbor.',
+    'Still scared of the sign tile from Level 1? Jump the quiet floor right after it.',
     'Have you considered that the obvious path might be stupid?',
-    'That faint red scratch on the ground isn’t modern art, genius.',
+    'A hidden pop-up spike is waiting ahead—don’t walk in asleep, genius.',
   ],
   3: [
     'Three tries and a slightly taller ledge is winning? Impressive.',
@@ -37,12 +37,12 @@ export const SARCASTIC_LEVEL_HINTS: Readonly<Record<number, readonly string[]>> 
   5: [
     'The platform moves. Your timing apparently doesn’t.',
     'That spinning blade climbs and drops. Your face just drops.',
-    'Landed safely—except for the angry red sliver waiting there.',
+    'Landed safely—except the pit is stretching behind you AND a hidden spike waits ahead.',
   ],
   6: [
     'Those wide ledges are on an aggressive diet—stop treating them like a couch.',
     'Standing still on a shrinking stone is a bold strategy. Terrible results.',
-    'You survived four vanishing rocks only to step on a red floor scratch.',
+    'You survived four vanishing rocks only to walk straight onto a hidden pop-up spike.',
   ],
   7: [
     'That checkpoint literally flew away to avoid being seen with you.',
@@ -86,13 +86,13 @@ export const SARCASTIC_LEVEL_HINTS: Readonly<Record<number, readonly string[]>> 
   ],
   15: [
     'That checkpoint grew legs just to escape your gameplay.',
-    'Two blades, one shuttle, and a red floor slit waiting at touchdown.',
+    'Two blades, one shuttle, and a hidden pop-up spike waiting at touchdown.',
     'Hesitating on cracked stone? Gravity sends its warmest regards.',
   ],
   16: [
     'Still getting flung into the abyss by that spring? Use your left thumb, idiot.',
     'Ride the trap elevator one second too long and become ceiling art again. Pathetic.',
-    'Two cracked stones and one red seam left—try not to choke like usual.',
+    'Two cracked stones and one hidden pop-up spike left—try not to choke like usual.',
   ],
   17: [
     'Headwind steals your jump and you STILL leap early? Hopeless.',
@@ -111,13 +111,13 @@ export const SARCASTIC_LEVEL_HINTS: Readonly<Record<number, readonly string[]>> 
   ],
   20: [
     'Cracked stone, saw, shuttle—and your reflexes are already disintegrating.',
-    'Bait the ceiling crusher before sprinting straight into that red floor seam, idiot.',
+    'Bait the ceiling crusher before sprinting straight into that hidden pop-up spike, idiot.',
     'The quit button is top right—honestly, it might be your best move here.',
   ],
   21: [
     'Lead boots cut your airtime in half and you STILL jump short. Embarrassing.',
     'Heavy gravity plus shrinking stones—zero room for slow brains like yours.',
-    'Survived the heavy jumps only to impale yourself on twin red seams. Pathetic.',
+    'The pit stretches behind you AND twin hidden spikes wait ahead. Run, idiot.',
   ],
   22: [
     'Looks like Level 1, except that spike slides left to humiliate your landing.',
@@ -137,12 +137,12 @@ export const SARCASTIC_LEVEL_HINTS: Readonly<Record<number, readonly string[]>> 
   25: [
     'Shuttle to ghost to cracked stone—and you’re STILL guessing like an amateur.',
     'Two vertical saws in a row and you chose the single worst beat. Classic loser.',
-    'Too busy chasing the door to notice twin red scars waiting to skewer you?',
+    'Too busy chasing the door to notice twin hidden pop-up spikes waiting to skewer you?',
   ],
   26: [
     'Opposite belts and shrinking midair blocks—way out of your league already?',
     'A tailwind is literally pushing you into a sky crusher and you refuse to brake.',
-    'Fight the gust, bait the slab, hop the seam. Not that you’ll pull it off.',
+    'Fight the gust, bait the slab, hop the hidden spike. Not that you’ll pull it off.',
   ],
   27: [
     'Every adaptive trap is awake, plus a shifty ledge—and you’re folding instantly.',
@@ -162,7 +162,7 @@ export const SARCASTIC_LEVEL_HINTS: Readonly<Record<number, readonly string[]>> 
   30: [
     'Icy launchpad, shrinking stone, ghost block, cracked stone—you’re way outmatched.',
     'Adaptive traps and a bobbing saw are laughing at every panicked click.',
-    'Two hidden crimson seams guard the fleeing finale door. Go ahead—choke now, loser.',
+    'Two hidden pop-up spikes guard the fleeing finale door. Go ahead—choke now, loser.',
   ],
   31: [
     '31 levels deep and you still haven’t learned how to brake on ice. Tragic.',
@@ -212,7 +212,7 @@ export const SARCASTIC_LEVEL_HINTS: Readonly<Record<number, readonly string[]>> 
   40: [
     'Level 40 and a single cracked stone still makes your palms sweat?',
     'Time the blade and shuttle cleanly—sloppy jumps won’t survive this chapter.',
-    'Two crimson floor slits guarding the finish. Go ahead, choke like usual.',
+    'Two hidden pop-up spikes guarding the finish. Go ahead, choke like usual.',
   ],
   41: [
     'Heavy gravity kills weak jumps—leap from the absolute edge or keep feeding the pit.',
@@ -247,12 +247,12 @@ export const SARCASTIC_LEVEL_HINTS: Readonly<Record<number, readonly string[]>> 
   47: [
     'Waxed ice rink with a sliding spike—counter-tap left or keep skating into death.',
     'Use the icy perch over the floor blade instead of hugging spinning steel, idiot.',
-    'Zero friction on the finale strip, and you’re still sprinting onto the red seam.',
+    'Zero friction on the finale strip, and you’re still sprinting onto the hidden spike.',
   ],
   48: [
-    'First spike ducks away harmlessly—stop jumping straight onto its lethal neighbor.',
-    'Two sliding spikes and a crusher later, you still haven’t figured out timing.',
-    'Panic-hopping in a decoy minefield? Pure comedy, loser.',
+    'Tailwind plus a stretching pit behind your heels—stop hesitating and sprint through the hollow wall.',
+    'Two spikes and a hollow ink pillar later, you still haven’t figured out momentum.',
+    'Freezing while the floor stretches away beneath you? Pure comedy, loser.',
   ],
   49: [
     'Giant chaser saw at your back—pause for half a second and you’re shredded.',
@@ -262,6 +262,6 @@ export const SARCASTIC_LEVEL_HINTS: Readonly<Record<number, readonly string[]>> 
   50: [
     '50% done and 100% broken—this boss stage is exposing every bad habit you have.',
     'Brake on the ice, catch the shuttle, and don’t trust anything that looks easy.',
-    'Two crimson floor seams guard the fleeing door. Choke here and prove me right, loser.',
+    'Two hidden pop-up spikes guard the fleeing door. Choke here and prove me right, loser.',
   ],
 };

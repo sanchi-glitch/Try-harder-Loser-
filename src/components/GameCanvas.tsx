@@ -1594,12 +1594,14 @@ export function GameCanvas({
 
   const levelNumPadded = String(hud.levelId).padStart(2, '0');
   const isDarkLevel = isHighIntensityDarknessLevel(hud.levelId);
+  const isFinale100 = hud.levelId === 100;
+  const isDarkUi = isDarkLevel || isFinale100;
   const difficultyStage = getDifficultyStage(hud.levelId);
 
   return (
     <div
       className={`relative w-full h-full overflow-hidden select-none ${
-        isDarkLevel ? 'bg-[#020204]' : 'bg-[#F5F3EE]'
+        isDarkLevel ? 'bg-[#020204]' : isFinale100 ? 'bg-[#1A1617]' : 'bg-[#F5F3EE]'
       }`}
     >
       {/* Shakeable Viewport Stage (canvas + HUD jolt together on hazard impact/death) */}
@@ -1613,25 +1615,37 @@ export function GameCanvas({
         <div className="flex items-start gap-3">
           <div
             className={`flex flex-col leading-none pr-3 border-r ${
-              isDarkLevel ? 'border-[#F5F3EE]/25' : 'border-[#111111]/20'
+              isFinale100
+                ? 'border-[#DC2626]/55'
+                : isDarkUi
+                  ? 'border-[#F5F3EE]/25'
+                  : 'border-[#111111]/20'
             }`}
           >
             <span
-              className={`text-[10px] font-mono-tabular font-semibold ${
-                isDarkLevel ? 'text-[#A8A29E]' : 'text-[#57534E]'
+              className={`text-[10px] font-mono-tabular font-semibold tracking-wider ${
+                isFinale100
+                  ? 'text-[#DC2626]'
+                  : isDarkUi
+                    ? 'text-[#A8A29E]'
+                    : 'text-[#57534E]'
               }`}
             >
-              LEVEL
+              {isFinale100 ? 'FINAL' : 'LEVEL'}
             </span>
             <div
               className={`font-display font-extrabold text-2xl sm:text-3xl tracking-tight font-mono-tabular mt-0.5 ${
-                isDarkLevel ? 'text-[#F5F3EE]' : 'text-[#111111]'
+                isFinale100
+                  ? 'text-[#EAB308]'
+                  : isDarkUi
+                    ? 'text-[#F5F3EE]'
+                    : 'text-[#111111]'
               }`}
             >
               {levelNumPadded}
               <span
                 className={`text-xs sm:text-sm font-medium ${
-                  isDarkLevel ? 'text-[#A8A29E]' : 'text-[#78716C]'
+                  isDarkUi ? 'text-[#A8A29E]' : 'text-[#78716C]'
                 }`}
               >
                 /{LEVELS.length}
@@ -1642,22 +1656,26 @@ export function GameCanvas({
           <div className="flex flex-col pt-0.5">
             <div
               className={`text-xs sm:text-sm font-display font-bold tracking-tight ${
-                isDarkLevel ? 'text-[#F5F3EE]' : 'text-[#111111]'
+                isDarkUi ? 'text-[#F5F3EE]' : 'text-[#111111]'
               }`}
             >
               {hud.levelName}
               <span
                 className={`hidden sm:inline font-sans font-normal ${
-                  isDarkLevel ? 'text-[#A8A29E]' : 'text-[#57534E]'
+                  isFinale100
+                    ? 'text-[#DC2626] font-mono-tabular font-semibold'
+                    : isDarkUi
+                      ? 'text-[#A8A29E]'
+                      : 'text-[#57534E]'
                 }`}
               >
                 {' '}
-                · {difficultyStage.name}
+                · {isFinale100 ? 'ZERO CHECKPOINTS' : difficultyStage.name}
               </span>
             </div>
             <div
               className={`flex items-center gap-2 text-[11px] sm:text-xs font-mono-tabular mt-0.5 ${
-                isDarkLevel ? 'text-[#D6D1C7]' : 'text-[#44403C]'
+                isDarkUi ? 'text-[#D6D1C7]' : 'text-[#44403C]'
               }`}
             >
               <span>{formatTimeMs(hud.elapsedMs)}</span>
@@ -1665,12 +1683,18 @@ export function GameCanvas({
               <span className={hud.levelDeaths > 0 ? 'text-[#DC2626] font-semibold' : ''}>
                 {hud.levelDeaths} {hud.levelDeaths === 1 ? 'Death' : 'Deaths'}
               </span>
-              {hud.checkpointReached && (
+              {isFinale100 && (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span className="text-[#EAB308] font-semibold">NO HINTS</span>
+                </>
+              )}
+              {hud.checkpointReached && !isFinale100 && (
                 <>
                   <span aria-hidden="true">·</span>
                   <span
                     className={`font-semibold ${
-                      isDarkLevel ? 'text-[#F5F3EE]' : 'text-[#111111]'
+                      isDarkUi ? 'text-[#F5F3EE]' : 'text-[#111111]'
                     }`}
                   >
                     Saved
@@ -1691,7 +1715,11 @@ export function GameCanvas({
             }}
             aria-label="Go to Home Screen"
             title="Home"
-            className="h-10 inline-flex items-center gap-1.5 px-2.5 sm:px-3 rounded-lg border border-[#111111]/25 bg-[#F5F3EE] text-[#111111] text-xs font-semibold hover:border-[#111111] active:scale-95 transition-all cursor-pointer whitespace-nowrap shrink-0"
+            className={`h-10 inline-flex items-center gap-1.5 px-2.5 sm:px-3 rounded-lg border text-xs font-semibold active:scale-95 transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+              isFinale100
+                ? 'border-[#DC2626]/45 bg-[#0E0C0D] text-[#F5F3EE] hover:border-[#EAB308]'
+                : 'border-[#111111]/25 bg-[#F5F3EE] text-[#111111] hover:border-[#111111]'
+            }`}
           >
             <Home className="w-4 h-4" />
             <span className="hidden sm:inline">Home</span>
@@ -1705,7 +1733,11 @@ export function GameCanvas({
             }}
             aria-label="Choose Level"
             title="Levels"
-            className="h-10 inline-flex items-center gap-1.5 px-2.5 sm:px-3 rounded-lg border border-[#111111]/25 bg-[#F5F3EE] text-[#111111] text-xs font-semibold hover:border-[#111111] active:scale-95 transition-all cursor-pointer whitespace-nowrap shrink-0"
+            className={`h-10 inline-flex items-center gap-1.5 px-2.5 sm:px-3 rounded-lg border text-xs font-semibold active:scale-95 transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+              isFinale100
+                ? 'border-[#DC2626]/45 bg-[#0E0C0D] text-[#F5F3EE] hover:border-[#EAB308]'
+                : 'border-[#111111]/25 bg-[#F5F3EE] text-[#111111] hover:border-[#111111]'
+            }`}
           >
             <Grid className="w-4 h-4" />
             <span className="hidden md:inline">Levels</span>
@@ -1719,7 +1751,11 @@ export function GameCanvas({
             }}
             aria-label={settings.muted ? 'Unmute audio' : 'Mute audio'}
             title="Mute (M)"
-            className="h-10 w-10 flex items-center justify-center rounded-lg border border-[#111111]/25 bg-[#F5F3EE] text-[#111111] hover:border-[#111111] active:scale-95 transition-all cursor-pointer shrink-0"
+            className={`h-10 w-10 flex items-center justify-center rounded-lg border active:scale-95 transition-all cursor-pointer shrink-0 ${
+              isFinale100
+                ? 'border-[#DC2626]/45 bg-[#0E0C0D] text-[#F5F3EE] hover:border-[#EAB308]'
+                : 'border-[#111111]/25 bg-[#F5F3EE] text-[#111111] hover:border-[#111111]'
+            }`}
           >
             {settings.muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
           </button>
@@ -1732,7 +1768,11 @@ export function GameCanvas({
             }}
             aria-label="Restart level"
             title="Restart (R)"
-            className="h-10 w-10 flex items-center justify-center rounded-lg border border-[#111111]/25 bg-[#F5F3EE] text-[#111111] hover:border-[#111111] active:scale-95 transition-all cursor-pointer shrink-0"
+            className={`h-10 w-10 flex items-center justify-center rounded-lg border active:scale-95 transition-all cursor-pointer shrink-0 ${
+              isFinale100
+                ? 'border-[#DC2626]/45 bg-[#0E0C0D] text-[#F5F3EE] hover:border-[#EAB308]'
+                : 'border-[#111111]/25 bg-[#F5F3EE] text-[#111111] hover:border-[#111111]'
+            }`}
           >
             <RotateCcw className="w-4 h-4" />
           </button>
@@ -1782,7 +1822,7 @@ export function GameCanvas({
             </button>
           )}
 
-          {hintDisplay.showHeaderButton && (
+          {hintDisplay.showHeaderButton && !isFinale100 && (
             <button
               type="button"
               disabled={hintAdLoading}
@@ -1827,7 +1867,11 @@ export function GameCanvas({
             }}
             aria-label="Open Game Menu"
             title="Menu (Esc)"
-            className="h-10 inline-flex items-center gap-1.5 px-3 rounded-lg border-2 border-[#111111] bg-[#111111] text-[#F5F3EE] text-xs font-display font-bold hover:bg-[#DC2626] hover:border-[#DC2626] active:scale-95 transition-all cursor-pointer whitespace-nowrap shrink-0"
+            className={`h-10 inline-flex items-center gap-1.5 px-3 rounded-lg border-2 text-xs font-display font-bold active:scale-95 transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+              isFinale100
+                ? 'border-[#DC2626] bg-[#DC2626] text-[#F5F3EE] hover:bg-[#EAB308] hover:border-[#EAB308] hover:text-[#09090B]'
+                : 'border-[#111111] bg-[#111111] text-[#F5F3EE] hover:bg-[#DC2626] hover:border-[#DC2626]'
+            }`}
           >
             <Menu className="w-4 h-4" />
             <span>Menu</span>
@@ -1841,26 +1885,36 @@ export function GameCanvas({
             <div
               key={`death-counter-${deathPulseId}`}
               aria-label={`Total failures: ${totalDeathsGlobal}, Level failures: ${hud.levelDeaths}`}
-              className={`inline-flex items-center gap-2 px-2.5 py-1 rounded-lg border bg-[#F5F3EE]/95 font-mono-tabular transition-colors ${
+              className={`inline-flex items-center gap-2 px-2.5 py-1 rounded-lg border font-mono-tabular transition-colors ${
                 deathPulseId > 0 ? 'animate-taunt-slam ' : ''
               }${
-                totalDeathsGlobal > 0
-                  ? 'border-[#DC2626]/55 shadow-[2px_2px_0px_rgba(220,38,38,0.2)]'
-                  : 'border-[#111111]/20 shadow-[2px_2px_0px_rgba(17,17,17,0.1)]'
+                isFinale100
+                  ? 'bg-[#0E0C0D]/95 border-[#DC2626]/70 shadow-[2px_2px_0px_rgba(220,38,38,0.35)]'
+                  : totalDeathsGlobal > 0
+                    ? 'bg-[#F5F3EE]/95 border-[#DC2626]/55 shadow-[2px_2px_0px_rgba(220,38,38,0.2)]'
+                    : 'bg-[#F5F3EE]/95 border-[#111111]/20 shadow-[2px_2px_0px_rgba(17,17,17,0.1)]'
               }`}
             >
               <Skull
                 className={`w-3.5 h-3.5 shrink-0 ${
-                  totalDeathsGlobal > 0 ? 'text-[#DC2626]' : 'text-[#57534E]'
+                  totalDeathsGlobal > 0 || isFinale100 ? 'text-[#DC2626]' : 'text-[#57534E]'
                 }`}
               />
               <div className="flex items-baseline gap-1.5 leading-none">
-                <span className="text-[10px] font-semibold uppercase tracking-wider text-[#57534E]">
+                <span
+                  className={`text-[10px] font-semibold uppercase tracking-wider ${
+                    isFinale100 ? 'text-[#A8A29E]' : 'text-[#57534E]'
+                  }`}
+                >
                   Fails
                 </span>
                 <span
                   className={`text-sm sm:text-base font-extrabold ${
-                    totalDeathsGlobal > 0 ? 'text-[#DC2626]' : 'text-[#111111]'
+                    totalDeathsGlobal > 0
+                      ? 'text-[#DC2626]'
+                      : isFinale100
+                        ? 'text-[#F5F3EE]'
+                        : 'text-[#111111]'
                   }`}
                 >
                   {totalDeathsGlobal}
@@ -1868,13 +1922,23 @@ export function GameCanvas({
               </div>
               <span
                 aria-hidden="true"
-                className="h-3 w-px bg-[#111111]/15"
+                className={`h-3 w-px ${isFinale100 ? 'bg-[#F5F3EE]/20' : 'bg-[#111111]/15'}`}
               />
-              <div className="flex items-baseline gap-1 leading-none text-[10px] sm:text-[11px] text-[#57534E]">
+              <div
+                className={`flex items-baseline gap-1 leading-none text-[10px] sm:text-[11px] ${
+                  isFinale100 ? 'text-[#A8A29E]' : 'text-[#57534E]'
+                }`}
+              >
                 <span>Lv</span>
                 <span
                   className={`font-bold ${
-                    hud.levelDeaths > 0 ? 'text-[#111111]' : 'text-[#57534E]'
+                    hud.levelDeaths > 0
+                      ? isFinale100
+                        ? 'text-[#EAB308]'
+                        : 'text-[#111111]'
+                      : isFinale100
+                        ? 'text-[#D6D3D1]'
+                        : 'text-[#57534E]'
                   }`}
                 >
                   {hud.levelDeaths}
@@ -1882,7 +1946,10 @@ export function GameCanvas({
               </div>
               {hud.levelDeathStreak >= 5 && (
                 <>
-                  <span aria-hidden="true" className="h-3 w-px bg-[#111111]/15" />
+                  <span
+                    aria-hidden="true"
+                    className={`h-3 w-px ${isFinale100 ? 'bg-[#F5F3EE]/20' : 'bg-[#111111]/15'}`}
+                  />
                   <span className="text-[10px] font-bold text-[#DC2626] leading-none">
                     {hud.levelDeathStreak}x
                   </span>
@@ -1890,7 +1957,10 @@ export function GameCanvas({
               )}
               {extraLives > 0 && (
                 <>
-                  <span aria-hidden="true" className="h-3 w-px bg-[#111111]/15" />
+                  <span
+                    aria-hidden="true"
+                    className={`h-3 w-px ${isFinale100 ? 'bg-[#F5F3EE]/20' : 'bg-[#111111]/15'}`}
+                  />
                   <span
                     title="Extra lives ready for exact-location respawn"
                     className="inline-flex items-center gap-0.5 text-[10px] sm:text-[11px] font-extrabold text-[#DC2626] leading-none"

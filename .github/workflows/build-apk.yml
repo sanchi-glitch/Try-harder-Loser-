@@ -40,7 +40,7 @@ jobs:
           echo "Bundled web game assets into app/src/main/assets/."
 
       - name: Set up Temurin Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -200,6 +200,15 @@ jobs:
             exit 1
           fi
           "${JAVA_HOME}/bin/jarsigner" -verify "$EXPECTED_AAB"
+          AAB_ENTRIES="$(unzip -Z1 "$EXPECTED_AAB")"
+          if ! grep -qx 'base/assets/index.html' <<< "$AAB_ENTRIES"; then
+            echo "::error::Release AAB is missing bundled web asset base/assets/index.html."
+            exit 1
+          fi
+          if ! grep -qE '^META-INF/.*\.(RSA|DSA|EC)$' <<< "$AAB_ENTRIES"; then
+            echo "::error::Release AAB is missing signing certificate under META-INF/."
+            exit 1
+          fi
           AAB_BYTES="$(wc -c < "$EXPECTED_AAB" | tr -d '[:space:]')"
           echo "Verified signed release AAB: ${EXPECTED_AAB} (${AAB_BYTES} bytes)"
 
@@ -271,7 +280,6 @@ jobs:
 
       - name: Publish release AAB and debug APK to GitHub Releases
         id: publish_release
-        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
           PREPARED_AAB: ${{ steps.prepare_release_assets.outputs.aab_asset_path }}
@@ -294,7 +302,7 @@ jobs:
           RELEASE_TAG="android-release-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
           RELEASE_TITLE="Android Release AAB & Debug APK Build #${GITHUB_RUN_NUMBER}"
 
-          if [ "$SIGNING_MODE" = "repository_secret" ]; then
+          if [ "${SIGNING_MODE:-}" = "repository_secret" ]; then
             SIGNING_NOTE="Signed using persistent repository upload keystore secret"
           else
             SIGNING_NOTE="Signed using CI-generated non-debug release keystore (configure ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD secrets for persistent Play Store updates)"
@@ -313,11 +321,36 @@ jobs:
           EOF
           )"
 
-          gh release create "$RELEASE_TAG" "$PREPARED_AAB" "$PREPARED_APK" \
-            --target "$GITHUB_SHA" \
-            --title "$RELEASE_TITLE" \
-            --notes "$RELEASE_NOTES" \
-            --latest
+          retry() {
+            local max_attempts=3
+            local attempt=1
+            until "$@"; do
+              if [ "$attempt" -ge "$max_attempts" ]; then
+                echo "::error::Command failed after ${max_attempts} attempts: $*"
+                return 1
+              fi
+              echo "::warning::Attempt ${attempt}/${max_attempts} failed; retrying in 5s..."
+              attempt=$((attempt + 1))
+              sleep 5
+            done
+          }
+
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            retry gh release create "$RELEASE_TAG" \
+              --target "$GITHUB_SHA" \
+              --title "$RELEASE_TITLE" \
+              --notes "$RELEASE_NOTES" \
+              --latest
+          fi
+
+          retry gh release upload "$RELEASE_TAG" "$PREPARED_AAB" --clobber
+          retry gh release upload "$RELEASE_TAG" "$PREPARED_APK" --clobber
+
+          UPLOADED_ASSETS="$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name')"
+          echo "Published release assets:"
+          echo "$UPLOADED_ASSETS"
+          grep -qx "app-release.aab" <<< "$UPLOADED_ASSETS"
+          grep -qx "app-debug.apk" <<< "$UPLOADED_ASSETS"
 
       - name: Report release AAB and debug APK download result
         if: always()

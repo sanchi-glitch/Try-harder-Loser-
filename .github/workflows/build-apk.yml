@@ -1,4 +1,4 @@
-name: Build Android Debug APK & AAB
+name: Build Android Release AAB & Debug APK
 
 on:
   push:
@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   build-debug-apk:
-    name: Build Try Harder, Loser Debug APK & AAB
+    name: Build Try Harder, Loser Release AAB & Debug APK
     runs-on: ubuntu-latest
 
     steps:
@@ -104,7 +104,13 @@ jobs:
         with:
           gradle-version: 9.3.1
 
-      - name: Create temporary debug keystore
+      - name: Prepare debug and release signing keystores
+        id: prepare_keystores
+        env:
+          SECRET_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          SECRET_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          SECRET_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          SECRET_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         shell: bash
         run: |
           set -euo pipefail
@@ -113,6 +119,7 @@ jobs:
             echo "::error::keytool executable not found in configured Java installation (${JAVA_HOME})."
             exit 1
           fi
+
           if [ ! -f "./debug.keystore" ]; then
             "$KEYTOOL" -genkeypair \
               -keystore ./debug.keystore \
@@ -128,19 +135,73 @@ jobs:
             echo "::error::Temporary debug keystore is missing or empty after generation."
             exit 1
           fi
-          echo "Temporary debug keystore verified."
 
-      - name: Build debug APK and AAB
+          if [ -n "${SECRET_KEYSTORE_BASE64:-}" ]; then
+            printf '%s' "$SECRET_KEYSTORE_BASE64" | tr -d '[:space:]' | base64 --decode > ./release.keystore
+            echo "ANDROID_KEYSTORE_PATH=release.keystore" >> "$GITHUB_ENV"
+            echo "ANDROID_KEYSTORE_PASSWORD=${SECRET_KEYSTORE_PASSWORD}" >> "$GITHUB_ENV"
+            echo "ANDROID_KEY_ALIAS=${SECRET_KEY_ALIAS}" >> "$GITHUB_ENV"
+            echo "ANDROID_KEY_PASSWORD=${SECRET_KEY_PASSWORD}" >> "$GITHUB_ENV"
+            echo "signing_mode=repository_secret" >> "$GITHUB_OUTPUT"
+            echo "Loaded persistent release keystore from repository secrets."
+          else
+            rm -f ./release.keystore
+            "$KEYTOOL" -genkeypair \
+              -keystore ./release.keystore \
+              -storepass tryharderrelease \
+              -alias upload \
+              -keypass tryharderrelease \
+              -dname "CN=Try Harder Loser,OU=Game,O=TryHarderLoser,C=US" \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 >/dev/null 2>&1
+            echo "ANDROID_KEYSTORE_PATH=release.keystore" >> "$GITHUB_ENV"
+            echo "ANDROID_KEYSTORE_PASSWORD=tryharderrelease" >> "$GITHUB_ENV"
+            echo "ANDROID_KEY_ALIAS=upload" >> "$GITHUB_ENV"
+            echo "ANDROID_KEY_PASSWORD=tryharderrelease" >> "$GITHUB_ENV"
+            echo "signing_mode=generated_release_keystore" >> "$GITHUB_OUTPUT"
+            echo "Generated non-debug release upload keystore for this build."
+          fi
+
+          if [ ! -f "./release.keystore" ] || [ ! -s "./release.keystore" ]; then
+            echo "::error::Release keystore is missing or empty."
+            exit 1
+          fi
+          echo "Debug and release keystores verified."
+
+      - name: Build release AAB and debug APK
         id: build_android
+        env:
+          ANDROID_VERSION_CODE: ${{ github.run_number }}
+          ANDROID_VERSION_NAME: 1.0.${{ github.run_number }}
         shell: bash
         run: |
-          gradle :app:assembleDebug :app:bundleDebug --stacktrace --no-daemon
+          gradle :app:bundleRelease :app:assembleDebug --stacktrace --no-daemon
 
-      - name: Verify debug APK and AAB
+      - name: Verify release AAB and debug APK
         id: verify_android
         shell: bash
         run: |
           set -euo pipefail
+
+          EXPECTED_AAB="app/build/outputs/bundle/release/app-release.aab"
+          if [ ! -e "$EXPECTED_AAB" ]; then
+            echo "::error::Expected release AAB was not found at ${EXPECTED_AAB}."
+            if [ -d "app/build/outputs/bundle" ]; then
+              echo "Discovered AAB files under app/build/outputs/bundle:"
+              find app/build/outputs/bundle -type f -name '*.aab' -print || true
+            else
+              echo "Directory app/build/outputs/bundle does not exist."
+            fi
+            exit 1
+          fi
+          if [ ! -f "$EXPECTED_AAB" ] || [ -L "$EXPECTED_AAB" ] || [ ! -s "$EXPECTED_AAB" ]; then
+            echo "::error::${EXPECTED_AAB} is missing, not a regular file, or empty."
+            exit 1
+          fi
+          "${JAVA_HOME}/bin/jarsigner" -verify "$EXPECTED_AAB"
+          AAB_BYTES="$(wc -c < "$EXPECTED_AAB" | tr -d '[:space:]')"
+          echo "Verified signed release AAB: ${EXPECTED_AAB} (${AAB_BYTES} bytes)"
 
           EXPECTED_APK="app/build/outputs/apk/debug/app-debug.apk"
           if [ ! -e "$EXPECTED_APK" ]; then
@@ -160,23 +221,13 @@ jobs:
           APK_BYTES="$(wc -c < "$EXPECTED_APK" | tr -d '[:space:]')"
           echo "Verified debug APK: ${EXPECTED_APK} (${APK_BYTES} bytes)"
 
-          EXPECTED_AAB="app/build/outputs/bundle/debug/app-debug.aab"
-          if [ ! -e "$EXPECTED_AAB" ]; then
-            echo "::error::Expected debug AAB was not found at ${EXPECTED_AAB}."
-            if [ -d "app/build/outputs/bundle" ]; then
-              echo "Discovered AAB files under app/build/outputs/bundle:"
-              find app/build/outputs/bundle -type f -name '*.aab' -print || true
-            else
-              echo "Directory app/build/outputs/bundle does not exist."
-            fi
-            exit 1
-          fi
-          if [ ! -f "$EXPECTED_AAB" ] || [ -L "$EXPECTED_AAB" ] || [ ! -s "$EXPECTED_AAB" ]; then
-            echo "::error::${EXPECTED_AAB} is missing, not a regular file, or empty."
-            exit 1
-          fi
-          AAB_BYTES="$(wc -c < "$EXPECTED_AAB" | tr -d '[:space:]')"
-          echo "Verified debug AAB: ${EXPECTED_AAB} (${AAB_BYTES} bytes)"
+      - name: Upload release AAB artifact
+        id: upload_aab_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release-aab
+          path: app/build/outputs/bundle/release/app-release.aab
+          if-no-files-found: error
 
       - name: Upload debug APK artifact
         id: upload_apk_artifact
@@ -186,80 +237,79 @@ jobs:
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
 
-      - name: Upload debug AAB artifact
-        id: upload_aab_artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: app-debug-aab
-          path: app/build/outputs/bundle/debug/app-debug.aab
-          if-no-files-found: error
-
-      - name: Prepare APK and AAB release assets
+      - name: Prepare release AAB and debug APK assets
         id: prepare_release_assets
         shell: bash
         run: |
           set -euo pipefail
+          SOURCE_AAB="app/build/outputs/bundle/release/app-release.aab"
           SOURCE_APK="app/build/outputs/apk/debug/app-debug.apk"
-          SOURCE_AAB="app/build/outputs/bundle/debug/app-debug.aab"
-          if [ ! -f "$SOURCE_APK" ] || [ ! -s "$SOURCE_APK" ]; then
-            echo "::error::Verified source APK missing at ${SOURCE_APK}."
+          if [ ! -f "$SOURCE_AAB" ] || [ ! -s "$SOURCE_AAB" ]; then
+            echo "::error::Verified source release AAB missing at ${SOURCE_AAB}."
             exit 1
           fi
-          if [ ! -f "$SOURCE_AAB" ] || [ ! -s "$SOURCE_AAB" ]; then
-            echo "::error::Verified source AAB missing at ${SOURCE_AAB}."
+          if [ ! -f "$SOURCE_APK" ] || [ ! -s "$SOURCE_APK" ]; then
+            echo "::error::Verified source debug APK missing at ${SOURCE_APK}."
             exit 1
           fi
           RELEASE_DIR="$(mktemp -d "${RUNNER_TEMP}/android-release-XXXXXX")"
+          AAB_ASSET_PATH="${RELEASE_DIR}/app-release.aab"
           APK_ASSET_PATH="${RELEASE_DIR}/app-debug.apk"
-          AAB_ASSET_PATH="${RELEASE_DIR}/app-debug.aab"
-          cp -- "$SOURCE_APK" "$APK_ASSET_PATH"
           cp -- "$SOURCE_AAB" "$AAB_ASSET_PATH"
-          if [ ! -f "$APK_ASSET_PATH" ] || [ ! -s "$APK_ASSET_PATH" ]; then
-            echo "::error::Failed to prepare APK release asset at ${APK_ASSET_PATH}."
-            exit 1
-          fi
+          cp -- "$SOURCE_APK" "$APK_ASSET_PATH"
           if [ ! -f "$AAB_ASSET_PATH" ] || [ ! -s "$AAB_ASSET_PATH" ]; then
-            echo "::error::Failed to prepare AAB release asset at ${AAB_ASSET_PATH}."
+            echo "::error::Failed to prepare release AAB asset at ${AAB_ASSET_PATH}."
             exit 1
           fi
-          echo "apk_asset_path=${APK_ASSET_PATH}" >> "$GITHUB_OUTPUT"
+          if [ ! -f "$APK_ASSET_PATH" ] || [ ! -s "$APK_ASSET_PATH" ]; then
+            echo "::error::Failed to prepare debug APK asset at ${APK_ASSET_PATH}."
+            exit 1
+          fi
           echo "aab_asset_path=${AAB_ASSET_PATH}" >> "$GITHUB_OUTPUT"
-          echo "Prepared release assets: $(basename "$APK_ASSET_PATH"), $(basename "$AAB_ASSET_PATH")"
+          echo "apk_asset_path=${APK_ASSET_PATH}" >> "$GITHUB_OUTPUT"
+          echo "Prepared release assets: $(basename "$AAB_ASSET_PATH"), $(basename "$APK_ASSET_PATH")"
 
-      - name: Publish APK and AAB to GitHub Releases
+      - name: Publish release AAB and debug APK to GitHub Releases
         id: publish_release
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
-          PREPARED_APK: ${{ steps.prepare_release_assets.outputs.apk_asset_path }}
           PREPARED_AAB: ${{ steps.prepare_release_assets.outputs.aab_asset_path }}
+          PREPARED_APK: ${{ steps.prepare_release_assets.outputs.apk_asset_path }}
+          SIGNING_MODE: ${{ steps.prepare_keystores.outputs.signing_mode }}
         shell: bash
         run: |
           set -euo pipefail
           gh --version
 
-          if [ -z "${PREPARED_APK:-}" ] || [ ! -f "$PREPARED_APK" ] || [ ! -s "$PREPARED_APK" ]; then
-            echo "::error::Prepared APK is missing, not a regular file, or empty."
+          if [ -z "${PREPARED_AAB:-}" ] || [ ! -f "$PREPARED_AAB" ] || [ ! -s "$PREPARED_AAB" ]; then
+            echo "::error::Prepared release AAB is missing, not a regular file, or empty."
             exit 1
           fi
-          if [ -z "${PREPARED_AAB:-}" ] || [ ! -f "$PREPARED_AAB" ] || [ ! -s "$PREPARED_AAB" ]; then
-            echo "::error::Prepared AAB is missing, not a regular file, or empty."
+          if [ -z "${PREPARED_APK:-}" ] || [ ! -f "$PREPARED_APK" ] || [ ! -s "$PREPARED_APK" ]; then
+            echo "::error::Prepared debug APK is missing, not a regular file, or empty."
             exit 1
           fi
 
-          RELEASE_TAG="debug-build-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
-          RELEASE_TITLE="Debug APK & AAB Build #${GITHUB_RUN_NUMBER}"
+          RELEASE_TAG="android-release-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
+          RELEASE_TITLE="Android Release AAB & Debug APK Build #${GITHUB_RUN_NUMBER}"
+
+          if [ "$SIGNING_MODE" = "repository_secret" ]; then
+            SIGNING_NOTE="Signed using persistent repository upload keystore secret"
+          else
+            SIGNING_NOTE="Signed using CI-generated non-debug release keystore (configure ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD secrets for persistent Play Store updates)"
+          fi
 
           RELEASE_NOTES="$(cat <<EOF
-          Automatically generated Android game debug APK and AAB built using GitHub Actions.
+          Automatically generated Android Release AAB and Debug APK built using GitHub Actions.
 
           - Game name: Try Harder, Loser
+          - Version: 1.0.${GITHUB_RUN_NUMBER} (versionCode ${GITHUB_RUN_NUMBER})
           - Workflow run number: ${GITHUB_RUN_NUMBER}
           - Workflow run attempt: ${GITHUB_RUN_ATTEMPT}
           - Source commit SHA: ${GITHUB_SHA}
-          - Artifacts: \`app-debug.aab\` (Android App Bundle) and \`app-debug.apk\` (Debug APK)
-          - Purpose: Intended for game testing (not a Google Play production release)
-          - Signing: Signed using a temporary debug keystore
+          - Artifacts: \`app-release.aab\` (Release Android App Bundle, non-debuggable) and \`app-debug.apk\` (Debug APK for direct device sideloading)
+          - Release AAB Signing: ${SIGNING_NOTE}
           EOF
           )"
 
@@ -269,22 +319,22 @@ jobs:
             --notes "$RELEASE_NOTES" \
             --latest
 
-      - name: Report APK and AAB download result
+      - name: Report release AAB and debug APK download result
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
           WEB_BUILD_OUTCOME: ${{ steps.build_web.outcome }}
           BUILD_OUTCOME: ${{ steps.build_android.outcome }}
           VERIFY_OUTCOME: ${{ steps.verify_android.outcome }}
-          APK_ARTIFACT_OUTCOME: ${{ steps.upload_apk_artifact.outcome }}
           AAB_ARTIFACT_OUTCOME: ${{ steps.upload_aab_artifact.outcome }}
+          APK_ARTIFACT_OUTCOME: ${{ steps.upload_apk_artifact.outcome }}
           RELEASE_OUTCOME: ${{ steps.publish_release.outcome }}
         shell: bash
         run: |
           set -euo pipefail
-          RELEASE_TAG="debug-build-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
-          RELEASE_TITLE="Debug APK & AAB Build #${GITHUB_RUN_NUMBER}"
-          DIRECT_AAB_URL="https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/app-debug.aab"
+          RELEASE_TAG="android-release-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
+          RELEASE_TITLE="Android Release AAB & Debug APK Build #${GITHUB_RUN_NUMBER}"
+          DIRECT_AAB_URL="https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/app-release.aab"
           DIRECT_APK_URL="https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/app-debug.apk"
 
           if [ "$RELEASE_OUTCOME" = "success" ]; then
@@ -293,30 +343,30 @@ jobs:
             echo "Release tag: ${RELEASE_TAG}"
             echo "Release title: ${RELEASE_TITLE}"
             echo "Release page URL: ${RELEASE_URL}"
-            echo "DIRECT AAB DOWNLOAD: ${DIRECT_AAB_URL}"
-            echo "DIRECT APK DOWNLOAD: ${DIRECT_APK_URL}"
-            echo "Backup Actions artifacts 'app-debug-aab' and 'app-debug-apk' remain available."
+            echo "DIRECT RELEASE AAB DOWNLOAD: ${DIRECT_AAB_URL}"
+            echo "DIRECT DEBUG APK DOWNLOAD: ${DIRECT_APK_URL}"
+            echo "Backup Actions artifacts 'app-release-aab' and 'app-debug-apk' remain available."
 
             {
-              echo "## DIRECT ANDROID DEBUG DOWNLOADS"
+              echo "## DIRECT ANDROID DOWNLOADS"
               echo ""
-              echo "- **Debug AAB (\`app-debug.aab\`):** ${DIRECT_AAB_URL}"
+              echo "- **Release AAB (\`app-release.aab\`):** ${DIRECT_AAB_URL}"
               echo "- **Debug APK (\`app-debug.apk\`):** ${DIRECT_APK_URL}"
               echo ""
               echo "- **Release tag:** \`${RELEASE_TAG}\`"
               echo "- **Release title:** ${RELEASE_TITLE}"
               echo "- **Release page:** ${RELEASE_URL}"
-              echo "- **Backup artifacts:** \`app-debug-aab\` and \`app-debug-apk\` remain available in this workflow run."
+              echo "- **Backup artifacts:** \`app-release-aab\` and \`app-debug-apk\` remain available in this workflow run."
             } >> "$GITHUB_STEP_SUMMARY"
           else
             echo "::warning::GitHub Release publishing did not succeed (release step outcome: ${RELEASE_OUTCOME})."
             echo "Web build outcome: ${WEB_BUILD_OUTCOME}"
             if [ "$BUILD_OUTCOME" = "success" ] && [ "$VERIFY_OUTCOME" = "success" ]; then
-              echo "Android build status: succeeded (app-debug.apk and app-debug.aab verified)."
+              echo "Android build status: succeeded (app-release.aab and app-debug.apk verified)."
             else
               echo "Android build status: failed or did not complete (build: ${BUILD_OUTCOME}, verify: ${VERIFY_OUTCOME})."
             fi
-            echo "Actions artifact 'app-debug-aab': ${AAB_ARTIFACT_OUTCOME}"
+            echo "Actions artifact 'app-release-aab': ${AAB_ARTIFACT_OUTCOME}"
             echo "Actions artifact 'app-debug-apk': ${APK_ARTIFACT_OUTCOME}"
 
             {
@@ -326,7 +376,7 @@ jobs:
               echo ""
               echo "- **Web assets build outcome:** \`${WEB_BUILD_OUTCOME}\`"
               echo "- **Android build outcome:** \`${BUILD_OUTCOME}\` (verify: \`${VERIFY_OUTCOME}\`)"
-              echo "- **Actions artifact (\`app-debug-aab\`):** \`${AAB_ARTIFACT_OUTCOME}\`"
+              echo "- **Actions artifact (\`app-release-aab\`):** \`${AAB_ARTIFACT_OUTCOME}\`"
               echo "- **Actions artifact (\`app-debug-apk\`):** \`${APK_ARTIFACT_OUTCOME}\`"
             } >> "$GITHUB_STEP_SUMMARY"
           fi

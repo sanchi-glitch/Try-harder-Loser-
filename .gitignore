@@ -10,6 +10,10 @@ coverage/
 app/build/
 app/src/main/assets/
 debug.keystore
+release.keystore
+*.keystore
+*.jks
 local.properties
 *.apk
+*.aab
 

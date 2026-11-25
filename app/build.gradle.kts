@@ -10,8 +10,8 @@ android {
         applicationId = "com.tryharderloser.game"
         minSdk = 24
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = System.getenv("ANDROID_VERSION_CODE")?.toIntOrNull() ?: 1
+        versionName = System.getenv("ANDROID_VERSION_NAME")?.takeIf { it.isNotBlank() } ?: "1.0.0"
     }
 
     signingConfigs {
@@ -24,6 +24,16 @@ android {
                 keyPassword = "android"
             }
         }
+        create("release") {
+            val releaseKeystorePath = System.getenv("ANDROID_KEYSTORE_PATH") ?: "release.keystore"
+            val releaseKeystore = rootProject.file(releaseKeystorePath)
+            if (releaseKeystore.exists()) {
+                storeFile = releaseKeystore
+                storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD") ?: "tryharderrelease"
+                keyAlias = System.getenv("ANDROID_KEY_ALIAS") ?: "upload"
+                keyPassword = System.getenv("ANDROID_KEY_PASSWORD") ?: "tryharderrelease"
+            }
+        }
     }
 
     buildTypes {
@@ -31,7 +41,13 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
         getByName("release") {
+            isDebuggable = false
             isMinifyEnabled = false
+            isShrinkResources = false
+            val releaseSigning = signingConfigs.getByName("release")
+            if (releaseSigning.storeFile != null) {
+                signingConfig = releaseSigning
+            }
         }
     }
 

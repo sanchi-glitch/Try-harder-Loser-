@@ -327,10 +327,6 @@ export class PlatformerEngine {
   private darknessFlashTimer = 2.8;
   private darknessLightBoost = false;
 
-  // Dynamic Fog of War state (obscures upcoming obstacles beyond player sight radius)
-  private fogLeadX = 48;
-  private fogRadiusScale = 1;
-
   // Camera & juice
   private camX = 0;
   private cameraShiftBias = 0;
@@ -1612,8 +1608,6 @@ export class PlatformerEngine {
       this.levelDeaths,
     );
     this.stickmanGhostTrail.clear();
-    this.fogLeadX = this.getFogOfWarMetrics().forwardLead;
-    this.fogRadiusScale = 1;
     this.camX = this.clampCameraX(this.px - VIEW_WIDTH * 0.35);
     this.spawnDust(this.px + PLAYER_W / 2, this.py + PLAYER_H / 2, 10, '#111111');
   }
@@ -1654,23 +1648,6 @@ export class PlatformerEngine {
     if (this.shakeTime > 0) {
       this.shakeTime = Math.max(0, this.shakeTime - dt);
     }
-    // Smoothly track player facing & movement tension for the dynamic Fog of War radius
-    const fogMetrics = this.getFogOfWarMetrics();
-    const targetFogLeadX = this.facing * fogMetrics.forwardLead;
-    const leadBlend = 1 - Math.exp(-dt * 6.5);
-    this.fogLeadX += (targetFogLeadX - this.fogLeadX) * leadBlend;
-
-    const targetFogScale =
-      this.state === 'won'
-        ? 3.2
-        : this.state === 'dying' || this.state === 'death_screen'
-          ? 1.28
-          : Math.abs(this.vx) > 195
-            ? 0.94
-            : 1;
-    const scaleBlend = 1 - Math.exp(-dt * (this.state === 'won' ? 3.2 : 5.5));
-    this.fogRadiusScale += (targetFogScale - this.fogRadiusScale) * scaleBlend;
-
     if (this.deathMessageTimer > 0) {
       this.deathMessageTimer -= dt;
       if (this.deathMessageTimer <= 0) {
@@ -3926,18 +3903,6 @@ export class PlatformerEngine {
       } else {
         this.drawSpotlightOverlay(ctx, tightRadius, worldUpliftY);
       }
-    } else {
-      // Dynamic Canvas-based Fog of War layer obscuring distant obstacles until the player gets dangerously close
-      this.drawFogOfWarLayer(
-        ctx,
-        viewMinX,
-        viewMaxX,
-        viewMinY,
-        viewMaxY,
-        worldUpliftY,
-        shakeX,
-        shakeY,
-      );
     }
 
     // Level 100 Obsidian Arena framing: subtle crimson architectural corner ticks + act escalation rim
@@ -4177,135 +4142,6 @@ export class PlatformerEngine {
     grad.addColorStop(1, this.darknessLightBoost ? 'rgba(1, 1, 3, 0.935)' : 'rgba(1, 1, 3, 0.975)');
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, VIEW_WIDTH, VIEW_HEIGHT);
-  }
-
-  private getFogOfWarMetrics(): { clearRadius: number; fogRadius: number; forwardLead: number } {
-    const id = this.level.id;
-    if (id >= 99) {
-      return { clearRadius: 132, fogRadius: 215, forwardLead: 38 };
-    }
-    if (id >= 76) {
-      return { clearRadius: 144, fogRadius: 234, forwardLead: 42 };
-    }
-    if (id >= 46) {
-      return { clearRadius: 158, fogRadius: 256, forwardLead: 46 };
-    }
-    if (id >= 16) {
-      return { clearRadius: 174, fogRadius: 280, forwardLead: 50 };
-    }
-    return { clearRadius: 190, fogRadius: 305, forwardLead: 54 };
-  }
-
-  private drawFogOfWarLayer(
-    ctx: CanvasRenderingContext2D,
-    viewMinX: number,
-    viewMaxX: number,
-    viewMinY: number,
-    viewMaxY: number,
-    worldUpliftY: number,
-    shakeX: number,
-    shakeY: number,
-  ): void {
-    // Once victory clears the fog wide open, skip drawing the veil
-    if (this.state === 'won' && this.fogRadiusScale > 2.8) return;
-
-    const isFinale100 = this.isFinale100Theme();
-    const metrics = this.getFogOfWarMetrics();
-    const pulse = this.prefersReducedMotion ? 0 : Math.sin(this.worldTime * 2.15) * 3.5;
-
-    const clearR = Math.max(60, (metrics.clearRadius + pulse) * this.fogRadiusScale);
-    const fogR = Math.max(clearR + 55, (metrics.fogRadius + pulse) * this.fogRadiusScale);
-
-    const cx = this.px + PLAYER_W * 0.5 - Math.round(this.camX) + this.fogLeadX + shakeX;
-    const cy = this.py + PLAYER_H * 0.5 - 12 - worldUpliftY + shakeY;
-
-    const fullW = viewMaxX - viewMinX;
-    const fullH = viewMaxY - viewMinY;
-
-    ctx.save();
-
-    // Pass 1: Radial Fog of War veil matching the arena paper/obsidian backdrop
-    // Completely obscures platforms, traps, saws, spikes, signs & exits beyond fogR
-    const fogGrad = ctx.createRadialGradient(cx, cy, clearR * 0.72, cx, cy, fogR);
-    const clearStop = Math.min(0.65, clearR / fogR);
-    const mid1 = clearStop + (1 - clearStop) * 0.34;
-    const mid2 = clearStop + (1 - clearStop) * 0.72;
-
-    if (isFinale100) {
-      fogGrad.addColorStop(0, 'rgba(26, 22, 23, 0)');
-      fogGrad.addColorStop(clearStop, 'rgba(26, 22, 23, 0)');
-      fogGrad.addColorStop(mid1, 'rgba(34, 21, 23, 0.52)');
-      fogGrad.addColorStop(mid2, 'rgba(26, 22, 23, 0.92)');
-      fogGrad.addColorStop(1, 'rgba(26, 22, 23, 1)');
-    } else {
-      fogGrad.addColorStop(0, 'rgba(245, 243, 238, 0)');
-      fogGrad.addColorStop(clearStop, 'rgba(245, 243, 238, 0)');
-      fogGrad.addColorStop(mid1, 'rgba(245, 243, 238, 0.46)');
-      fogGrad.addColorStop(mid2, 'rgba(245, 243, 238, 0.90)');
-      fogGrad.addColorStop(1, 'rgba(245, 243, 238, 1)');
-    }
-
-    ctx.fillStyle = fogGrad;
-    ctx.fillRect(viewMinX, viewMinY, fullW, fullH);
-
-    // Pass 2: Subtle atmospheric mist contour along the creeping sightline boundary
-    const ringGrad = ctx.createRadialGradient(cx, cy, clearR * 0.92, cx, cy, fogR * 1.04);
-    ringGrad.addColorStop(0, 'rgba(0, 0, 0, 0)');
-    ringGrad.addColorStop(
-      0.48,
-      isFinale100 ? 'rgba(220, 38, 38, 0.13)' : 'rgba(17, 17, 17, 0.045)',
-    );
-    ringGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
-    ctx.fillStyle = ringGrad;
-    ctx.fillRect(viewMinX, viewMinY, fullW, fullH);
-
-    // Pass 3: Re-stamp seamless edge-to-edge drafting grid lines across the fogged periphery
-    // so obscured regions remain crisp blank graph paper rather than a flat patch
-    const gridCutoutR = clearR + (fogR - clearR) * 0.45;
-    ctx.beginPath();
-    ctx.rect(viewMinX, viewMinY, fullW, fullH);
-    ctx.arc(cx, cy, gridCutoutR, 0, Math.PI * 2, true);
-    ctx.clip('evenodd');
-
-    const gridSize = 40;
-    const phaseX = ((-this.camX * 0.35) % gridSize + gridSize) % gridSize;
-    const firstX = Math.floor((viewMinX - phaseX) / gridSize) * gridSize + phaseX;
-    const firstY = Math.floor(viewMinY / gridSize) * gridSize;
-
-    ctx.strokeStyle = isFinale100 ? 'rgba(220, 38, 38, 0.11)' : 'rgba(17, 17, 17, 0.042)';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    for (let x = firstX; x <= viewMaxX + gridSize; x += gridSize) {
-      ctx.moveTo(x, viewMinY);
-      ctx.lineTo(x, viewMaxY);
-    }
-    for (let y = firstY; y <= viewMaxY + gridSize; y += gridSize) {
-      ctx.moveTo(viewMinX, y);
-      ctx.lineTo(viewMaxX, y);
-    }
-    ctx.stroke();
-
-    if (isFinale100) {
-      const majorSize = 200;
-      const majorPhaseX = ((-this.camX * 0.35) % majorSize + majorSize) % majorSize;
-      const firstMajorX =
-        Math.floor((viewMinX - majorPhaseX) / majorSize) * majorSize + majorPhaseX;
-      const firstMajorY = Math.floor(viewMinY / majorSize) * majorSize;
-      ctx.strokeStyle = 'rgba(220, 38, 38, 0.19)';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      for (let x = firstMajorX; x <= viewMaxX + majorSize; x += majorSize) {
-        ctx.moveTo(x, viewMinY);
-        ctx.lineTo(x, viewMaxY);
-      }
-      for (let y = firstMajorY; y <= viewMaxY + majorSize; y += majorSize) {
-        ctx.moveTo(viewMinX, y);
-        ctx.lineTo(viewMaxX, y);
-      }
-      ctx.stroke();
-    }
-
-    ctx.restore();
   }
 
   private drawBackgroundGrid(

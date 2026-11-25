@@ -18,7 +18,6 @@ import {
   X,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import { type DeathStreakMilestone } from '../data/deathMessages';
 import { getDifficultyStage } from '../data/difficultyStages';
 import { getPrimaryLevelHint, HINT_SYSTEM_MAX_LEVEL } from '../data/hintClues';
 import { getLevelById, LEVELS } from '../data/levels';
@@ -36,12 +35,14 @@ import {
   type DarknessRenderFrame,
 } from '../engine/gameEngine';
 import { formatTimeMs } from '../engine/saveManager';
+import { deathTauntService } from '../services/deathTauntService';
 import type {
   DeathLocationSnapshot,
   GameSettings,
   HudSnapshot,
   UsedLevelHint,
 } from '../types/game';
+import { DeathTauntBubble } from './DeathTauntBubble';
 
 interface GameCanvasProps {
   levelId: number;
@@ -1261,13 +1262,6 @@ export function GameCanvas({
     }
   };
 
-  const [activeTaunt, setActiveTaunt] = useState<{
-    id: number;
-    text: string;
-    streakMilestone: DeathStreakMilestone | null;
-  } | null>(null);
-  const tauntTimerRef = useRef<number | null>(null);
-
   // Screen shake & impact flash refs/state (never unmounts canvas)
   const shakeStageRef = useRef<HTMLDivElement | null>(null);
   const shakeTimerRef = useRef<number | null>(null);
@@ -1309,11 +1303,7 @@ export function GameCanvas({
   };
 
   const clearActiveTaunt = () => {
-    if (tauntTimerRef.current !== null) {
-      window.clearTimeout(tauntTimerRef.current);
-      tauntTimerRef.current = null;
-    }
-    setActiveTaunt(null);
+    deathTauntService.dismiss();
   };
 
   // Detect touch capability once on mount
@@ -1332,22 +1322,22 @@ export function GameCanvas({
 
     const engine = new PlatformerEngine(canvas, levelId, settings, totalDeathsGlobal, {
       onHudUpdate: (snap) => setHud(snap),
-      onDeathRecorded: (lid, ld, streak) => {
+      onDeathRecorded: (lid, ld, streak, deathContext) => {
         triggerScreenShake('death');
         setDeathPulseId((id) => id + 1);
-        const hudTaunt = commentaryService.getHudDeathTaunt(lid, streak);
-        setActiveTaunt((prev) => ({
-          id: (prev?.id ?? 0) + 1,
-          text: hudTaunt.text,
-          streakMilestone: hudTaunt.streakMilestone,
-        }));
-        if (tauntTimerRef.current !== null) {
-          window.clearTimeout(tauntTimerRef.current);
-        }
-        tauntTimerRef.current = window.setTimeout(() => {
-          setActiveTaunt(null);
-          tauntTimerRef.current = null;
-        }, hudTaunt.durationMs);
+        deathTauntService.triggerDeathTaunt(
+          deathContext ?? {
+            levelId: lid,
+            cause: 'pit',
+            levelDeaths: ld,
+            deathStreak: streak,
+            totalDeaths: totalDeathsGlobal + 1,
+            quickDeaths: 0,
+            elapsedMs: 3000,
+            progressRatio: 0,
+            repeatObstacleCount: 0,
+          },
+        );
         callbacksRef.current.onDeathRecorded(lid, ld);
       },
       onDeathScreenOpen: (snapshot) => {
@@ -1368,10 +1358,7 @@ export function GameCanvas({
     engine.start();
 
     return () => {
-      if (tauntTimerRef.current !== null) {
-        window.clearTimeout(tauntTimerRef.current);
-        tauntTimerRef.current = null;
-      }
+      deathTauntService.dismiss();
       if (shakeTimerRef.current !== null) {
         window.clearTimeout(shakeTimerRef.current);
         shakeTimerRef.current = null;
@@ -1974,23 +1961,9 @@ export function GameCanvas({
           </div>
         )}
 
-        {/* Sarcastic Death Taunt & Prank Banner (non-blocking top-center strip) */}
-        <div className="pointer-events-none absolute inset-x-0 top-16 sm:top-14 z-20 flex flex-col items-center gap-2 px-4">
-          {activeTaunt && (
-            <div
-              key={`taunt-${activeTaunt.id}`}
-              className={`animate-commentary-mock max-w-md text-center px-4 py-2 rounded-lg bg-[#111111] text-[#F5F3EE] border-2 border-[#DC2626] shadow-[3px_3px_0px_rgba(220,38,38,0.35)] text-xs sm:text-sm font-medium ${
-                activeTaunt.streakMilestone ? 'ring-2 ring-[#DC2626]/40' : ''
-              }`}
-            >
-              {activeTaunt.streakMilestone && (
-                <div className="text-[10px] font-mono-tabular font-extrabold tracking-wider text-[#DC2626] uppercase mb-0.5">
-                  {activeTaunt.streakMilestone}-DEATH STREAK · STICKMAN ROAST
-                </div>
-              )}
-              &ldquo;{activeTaunt.text}&rdquo;
-            </div>
-          )}
+        {/* Context-Aware Sarcastic Death Taunt Pop-Up Bubble & Prank Banner */}
+        <div className="pointer-events-none absolute inset-x-0 top-14 sm:top-14 z-30 flex flex-col items-center gap-1.5 px-4">
+          <DeathTauntBubble isFinale100={isFinale100} />
           {hud.prankBanner && (
             <div
               key={`prank-${hud.prankBannerId}`}

@@ -19,6 +19,7 @@ import { adaptiveDifficulty } from './adaptiveDifficulty';
 import { audioManager } from './audio';
 import { commentaryService } from './commentaryService';
 import { StickmanGhostTrail } from './stickmanGhostTrail';
+import type { DeathTauntContext } from '../services/deathTauntService';
 
 // Logical viewport dimensions (16:9 landscape, crisp DPR scaling)
 export const VIEW_WIDTH = 960;
@@ -218,7 +219,12 @@ export interface DangerVignetteRenderFrame {
 
 export interface EngineCallbacks {
   onHudUpdate: (snapshot: HudSnapshot) => void;
-  onDeathRecorded: (levelId: number, totalLevelDeaths: number, levelDeathStreak: number) => void;
+  onDeathRecorded: (
+    levelId: number,
+    totalLevelDeaths: number,
+    levelDeathStreak: number,
+    context?: DeathTauntContext,
+  ) => void;
   onDeathScreenOpen?: (snapshot: DeathLocationSnapshot) => void;
   onTrickTriggered: (kind: 'trap' | 'fake_reward' | 'fourth_wall') => void;
   onRenderDarknessMask?: (ctx: CanvasRenderingContext2D, frame: DarknessRenderFrame) => void;
@@ -303,6 +309,16 @@ export class PlatformerEngine {
   private checkpointReached = false;
   private pendingFullStartReset = false;
   private revealedTriggers = new Set<string>();
+  private runawaySurpriseGates: Array<{
+    triggerId: string;
+    exitId: string;
+    hostPlatId?: string;
+    platformCutoffX: number;
+    obstacleCutoffX: number;
+    lockMaxX: number;
+    requiredParentTrigger?: string;
+  }> = [];
+  private entitySurpriseTrigger = new WeakMap<object, string>();
   private dynamicGravityScale: number | null = null;
   private checkpointGravityScale: number | null = null;
 
@@ -310,6 +326,10 @@ export class PlatformerEngine {
   private darknessFlashAlpha = 0;
   private darknessFlashTimer = 2.8;
   private darknessLightBoost = false;
+
+  // Dynamic Fog of War state (obscures upcoming obstacles beyond player sight radius)
+  private fogLeadX = 48;
+  private fogRadiusScale = 1;
 
   // Camera & juice
   private camX = 0;
@@ -987,6 +1007,21 @@ export class PlatformerEngine {
     return true;
   }
 
+  private isEntityUnlockedByTriggers(
+    entity: object,
+    revealOnTriggerId?: string,
+    hideOnTriggerId?: string,
+  ): boolean {
+    if (!this.isEntityVisibleByTriggers(revealOnTriggerId, hideOnTriggerId)) {
+      return false;
+    }
+    const surpriseTriggerId = this.entitySurpriseTrigger.get(entity);
+    if (surpriseTriggerId && !this.revealedTriggers.has(surpriseTriggerId)) {
+      return false;
+    }
+    return true;
+  }
+
   private getEffectiveWorldBounds(): { minX: number; maxX: number } {
     let minX = 0;
     let maxX = this.level.worldWidth;
@@ -1001,25 +1036,210 @@ export class PlatformerEngine {
         }
       }
     }
+    for (const gate of this.runawaySurpriseGates) {
+      if (gate.requiredParentTrigger && !this.revealedTriggers.has(gate.requiredParentTrigger)) {
+        continue;
+      }
+      if (!this.revealedTriggers.has(gate.triggerId)) {
+        maxX = Math.min(maxX, gate.lockMaxX);
+      }
+    }
     return { minX, maxX: Math.max(minX + VIEW_WIDTH, maxX) };
   }
 
-  private unlockHiddenTrackTrigger(triggerId: string): void {
-    if (this.revealedTriggers.has(triggerId)) return;
+  private rebuildRunawaySurpriseGates(fullReset: boolean): void {
+    this.runawaySurpriseGates = [];
+    this.entitySurpriseTrigger = new WeakMap<object, string>();
+
+    for (const exDef of this.level.exits) {
+      if (exDef.fake) continue;
+
+      const doorTriggerIds: string[] = [];
+
+      if (exDef.moveTargets && exDef.moveTargets.length > 0) {
+        for (let i = 0; i < exDef.moveTargets.length; i++) {
+          const prevX = i === 0 ? exDef.x : exDef.moveTargets[i - 1].x;
+          const prevY = i === 0 ? exDef.y : exDef.moveTargets[i - 1].y;
+          const next = exDef.moveTargets[i];
+          const triggerId = next.revealsTriggerId ?? `__runaway_${exDef.id}_${i}`;
+          doorTriggerIds.push(triggerId);
+
+          if (next.x <= prevX + 20) continue;
+
+          const hostPlat = this.level.platforms.find(
+            (p) => p.x <= prevX && p.x + p.w >= prevX && Math.abs(p.y - prevY) <= 24,
+          );
+          const platformCutoffX = hostPlat ? hostPlat.x + hostPlat.w - 4 : prevX + 48;
+          const obstacleCutoffX = prevX + 28;
+          const lockMaxX = hostPlat ? Math.min(hostPlat.x + hostPlat.w, prevX + 120) : prevX + 110;
+
+          this.runawaySurpriseGates.push({
+            triggerId,
+            exitId: exDef.id,
+            hostPlatId: hostPlat?.id,
+            platformCutoffX,
+            obstacleCutoffX,
+            lockMaxX,
+            requiredParentTrigger: exDef.revealOnTriggerId,
+          });
+        }
+      } else if (
+        exDef.retreatSpeed &&
+        exDef.retreatMaxX !== undefined &&
+        exDef.retreatMaxX > exDef.x + 20
+      ) {
+        const triggerId = `__retreat_${exDef.id}`;
+        doorTriggerIds.push(triggerId);
+
+        const hostPlat = this.level.platforms.find(
+          (p) => p.x <= exDef.x && p.x + p.w >= exDef.x && Math.abs(p.y - exDef.y) <= 24,
+        );
+        const platformCutoffX = hostPlat ? hostPlat.x + hostPlat.w - 4 : exDef.x + 48;
+        const obstacleCutoffX = exDef.x + 28;
+        const lockMaxX = hostPlat ? Math.min(hostPlat.x + hostPlat.w, exDef.x + 120) : exDef.x + 110;
+
+        this.runawaySurpriseGates.push({
+          triggerId,
+          exitId: exDef.id,
+          hostPlatId: hostPlat?.id,
+          platformCutoffX,
+          obstacleCutoffX,
+          lockMaxX,
+          requiredParentTrigger: exDef.revealOnTriggerId,
+        });
+      }
+
+      // Whenever the runaway door resets back to its starting spot on checkpoint respawn,
+      // re-hide its surprise obstacles & track so they never spoil the ambush on retries!
+      if (!fullReset && doorTriggerIds.length > 0 && this.spawnX <= exDef.x + 40) {
+        for (const tid of doorTriggerIds) {
+          this.revealedTriggers.delete(tid);
+        }
+      }
+    }
+  }
+
+  private applyRunawaySurpriseGates(): void {
+    if (this.runawaySurpriseGates.length === 0) return;
+
+    const findGateForPlatform = (p: RuntimePlatform) => {
+      let matched: (typeof this.runawaySurpriseGates)[number] | null = null;
+      for (const gate of this.runawaySurpriseGates) {
+        if (p.def.id === gate.hostPlatId) continue;
+        const beyondHost = p.def.x >= gate.platformCutoffX;
+        const elevatedAfterDoor = p.def.x > gate.obstacleCutoffX && p.def.h < 60;
+        if (beyondHost || elevatedAfterDoor) {
+          if (!matched || gate.obstacleCutoffX >= matched.obstacleCutoffX) {
+            matched = gate;
+          }
+        }
+      }
+      return matched;
+    };
+
+    const findGateForX = (x: number) => {
+      let matched: (typeof this.runawaySurpriseGates)[number] | null = null;
+      for (const gate of this.runawaySurpriseGates) {
+        if (x > gate.obstacleCutoffX) {
+          if (!matched || gate.obstacleCutoffX >= matched.obstacleCutoffX) {
+            matched = gate;
+          }
+        }
+      }
+      return matched;
+    };
+
+    for (const p of this.platforms) {
+      const gate = findGateForPlatform(p);
+      if (gate) {
+        this.entitySurpriseTrigger.set(p, gate.triggerId);
+        if (!this.revealedTriggers.has(gate.triggerId)) {
+          p.revealed = false;
+          p.active = false;
+          p.revealAnim = 0;
+        }
+      }
+    }
+
+    for (const h of this.hazards) {
+      const gate = findGateForX(h.def.x);
+      if (gate) {
+        this.entitySurpriseTrigger.set(h, gate.triggerId);
+        if (!this.revealedTriggers.has(gate.triggerId)) {
+          h.revealed = false;
+          h.active = false;
+          h.revealAnim = 0;
+        }
+      }
+    }
+
+    for (const cp of this.checkpoints) {
+      const gate = findGateForX(cp.def.x);
+      if (gate) {
+        this.entitySurpriseTrigger.set(cp, gate.triggerId);
+        if (!this.revealedTriggers.has(gate.triggerId)) {
+          cp.revealed = false;
+          cp.revealAnim = 0;
+        }
+      }
+    }
+
+    for (const s of this.signs) {
+      const gate = findGateForX(s.def.x);
+      if (gate) {
+        this.entitySurpriseTrigger.set(s, gate.triggerId);
+        if (!this.revealedTriggers.has(gate.triggerId)) {
+          s.revealed = false;
+          s.revealAnim = 0;
+        }
+      }
+    }
+
+    for (const r of this.rewards) {
+      const gate = findGateForX(r.def.x);
+      if (gate) {
+        this.entitySurpriseTrigger.set(r, gate.triggerId);
+        if (!this.revealedTriggers.has(gate.triggerId)) {
+          r.revealed = false;
+          r.revealAnim = 0;
+        }
+      }
+    }
+
+    for (const sw of this.switches) {
+      const gate = findGateForX(sw.def.x);
+      if (gate) {
+        this.entitySurpriseTrigger.set(sw, gate.triggerId);
+        if (!this.revealedTriggers.has(gate.triggerId)) {
+          sw.revealed = false;
+          sw.revealAnim = 0;
+        }
+      }
+    }
+  }
+
+  private unlockHiddenTrackTrigger(triggerId: string): boolean {
+    if (this.revealedTriggers.has(triggerId)) return false;
     this.revealedTriggers.add(triggerId);
 
     const snap = adaptiveDifficulty.getSnapshot(this.level.id);
+    let revealedAny = false;
 
     for (const p of this.platforms) {
       if (p.def.kind === 'reveal_wall' && p.def.linkedTriggerId === triggerId) {
         p.retracted = true;
+        revealedAny = true;
         this.spawnDust(p.x + p.w / 2, p.y + p.h / 2, 18, '#111111');
       }
-      if (p.def.revealOnTriggerId === triggerId) {
+      if (
+        (p.def.revealOnTriggerId === triggerId || this.entitySurpriseTrigger.get(p) === triggerId) &&
+        this.isEntityUnlockedByTriggers(p, p.def.revealOnTriggerId, p.def.hideOnTriggerId)
+      ) {
         const condMet = this.checkAdaptiveCondition(p.def.adaptiveCondition, snap);
         p.revealed = true;
         p.revealAnim = 0.01;
         p.active = condMet;
+        revealedAny = true;
         this.spawnDust(p.x + p.w / 2, p.y + Math.min(20, p.h / 2), 8, '#111111');
       }
       if (p.def.hideOnTriggerId === triggerId) {
@@ -1030,11 +1250,16 @@ export class PlatformerEngine {
     }
 
     for (const h of this.hazards) {
-      if (h.def.revealOnTriggerId === triggerId) {
+      if (
+        (h.def.revealOnTriggerId === triggerId || this.entitySurpriseTrigger.get(h) === triggerId) &&
+        this.isEntityUnlockedByTriggers(h, h.def.revealOnTriggerId, h.def.hideOnTriggerId)
+      ) {
         const condMet = this.checkAdaptiveCondition(h.def.adaptiveCondition, snap);
         h.revealed = true;
         h.revealAnim = 0.01;
         h.active = condMet;
+        revealedAny = true;
+        this.spawnDust(h.x + h.w / 2, h.y + h.h / 2, 7, '#DC2626');
       }
       if (h.def.hideOnTriggerId === triggerId) {
         h.revealed = false;
@@ -1043,9 +1268,13 @@ export class PlatformerEngine {
     }
 
     for (const cp of this.checkpoints) {
-      if (cp.def.revealOnTriggerId === triggerId) {
+      if (
+        (cp.def.revealOnTriggerId === triggerId || this.entitySurpriseTrigger.get(cp) === triggerId) &&
+        this.isEntityUnlockedByTriggers(cp, cp.def.revealOnTriggerId, cp.def.hideOnTriggerId)
+      ) {
         cp.revealed = true;
         cp.revealAnim = 0.01;
+        revealedAny = true;
       }
       if (cp.def.hideOnTriggerId === triggerId) {
         cp.revealed = false;
@@ -1053,9 +1282,13 @@ export class PlatformerEngine {
     }
 
     for (const s of this.signs) {
-      if (s.def.revealOnTriggerId === triggerId) {
+      if (
+        (s.def.revealOnTriggerId === triggerId || this.entitySurpriseTrigger.get(s) === triggerId) &&
+        this.isEntityUnlockedByTriggers(s, s.def.revealOnTriggerId, s.def.hideOnTriggerId)
+      ) {
         s.revealed = true;
         s.revealAnim = 0.01;
+        revealedAny = true;
       }
       if (s.def.hideOnTriggerId === triggerId) {
         s.revealed = false;
@@ -1063,9 +1296,13 @@ export class PlatformerEngine {
     }
 
     for (const r of this.rewards) {
-      if (r.def.revealOnTriggerId === triggerId) {
+      if (
+        (r.def.revealOnTriggerId === triggerId || this.entitySurpriseTrigger.get(r) === triggerId) &&
+        this.isEntityUnlockedByTriggers(r, r.def.revealOnTriggerId, r.def.hideOnTriggerId)
+      ) {
         r.revealed = true;
         r.revealAnim = 0.01;
+        revealedAny = true;
       }
       if (r.def.hideOnTriggerId === triggerId) {
         r.revealed = false;
@@ -1076,6 +1313,7 @@ export class PlatformerEngine {
       if (ex.def.revealOnTriggerId === triggerId) {
         ex.revealed = true;
         ex.revealAnim = 0.01;
+        revealedAny = true;
         this.spawnDust(ex.x, ex.y - 34, 14, '#DC2626');
       }
       if (ex.def.hideOnTriggerId === triggerId) {
@@ -1084,9 +1322,13 @@ export class PlatformerEngine {
     }
 
     for (const sw of this.switches) {
-      if (sw.def.revealOnTriggerId === triggerId) {
+      if (
+        (sw.def.revealOnTriggerId === triggerId || this.entitySurpriseTrigger.get(sw) === triggerId) &&
+        this.isEntityUnlockedByTriggers(sw, sw.def.revealOnTriggerId, sw.def.hideOnTriggerId)
+      ) {
         sw.revealed = true;
         sw.revealAnim = 0.01;
+        revealedAny = true;
       }
       if (sw.def.hideOnTriggerId === triggerId) {
         sw.revealed = false;
@@ -1098,9 +1340,11 @@ export class PlatformerEngine {
       this.darknessFlashAlpha = Math.max(this.darknessFlashAlpha, 0.78);
     }
     this.triggerShake(0.28, 8.5);
+    return revealedAny;
   }
 
   private buildEntities(fullReset: boolean): void {
+    this.rebuildRunawaySurpriseGates(fullReset);
     const snap = adaptiveDifficulty.getSnapshot(this.level.id);
     this.adaptiveHint = this.level.id <= HINT_SYSTEM_MAX_LEVEL ? snap.activeModifierText : null;
 
@@ -1328,6 +1572,9 @@ export class PlatformerEngine {
         }
       }
     }
+
+    // Apply zero-spoiler runaway-door gates across all platforms, hazards, signs, rewards & switches
+    this.applyRunawaySurpriseGates();
   }
 
   private checkAdaptiveCondition(
@@ -1365,6 +1612,8 @@ export class PlatformerEngine {
       this.levelDeaths,
     );
     this.stickmanGhostTrail.clear();
+    this.fogLeadX = this.getFogOfWarMetrics().forwardLead;
+    this.fogRadiusScale = 1;
     this.camX = this.clampCameraX(this.px - VIEW_WIDTH * 0.35);
     this.spawnDust(this.px + PLAYER_W / 2, this.py + PLAYER_H / 2, 10, '#111111');
   }
@@ -1405,6 +1654,23 @@ export class PlatformerEngine {
     if (this.shakeTime > 0) {
       this.shakeTime = Math.max(0, this.shakeTime - dt);
     }
+    // Smoothly track player facing & movement tension for the dynamic Fog of War radius
+    const fogMetrics = this.getFogOfWarMetrics();
+    const targetFogLeadX = this.facing * fogMetrics.forwardLead;
+    const leadBlend = 1 - Math.exp(-dt * 6.5);
+    this.fogLeadX += (targetFogLeadX - this.fogLeadX) * leadBlend;
+
+    const targetFogScale =
+      this.state === 'won'
+        ? 3.2
+        : this.state === 'dying' || this.state === 'death_screen'
+          ? 1.28
+          : Math.abs(this.vx) > 195
+            ? 0.94
+            : 1;
+    const scaleBlend = 1 - Math.exp(-dt * (this.state === 'won' ? 3.2 : 5.5));
+    this.fogRadiusScale += (targetFogScale - this.fogRadiusScale) * scaleBlend;
+
     if (this.deathMessageTimer > 0) {
       this.deathMessageTimer -= dt;
       if (this.deathMessageTimer <= 0) {
@@ -2789,6 +3055,18 @@ export class PlatformerEngine {
       ) {
         const trigR = ex.def.retreatTriggerDist ?? 135;
         if (dist < trigR && playerCenterX < ex.x + 8) {
+          const retreatTriggerId = `__retreat_${ex.def.id}`;
+          if (!this.revealedTriggers.has(retreatTriggerId)) {
+            const revealedSurprise = this.unlockHiddenTrackTrigger(retreatTriggerId);
+            if (revealedSurprise) {
+              audioManager.playTrap();
+              this.recordTrick('trap');
+              this.showPrankBanner(
+                ex.def.fakeMessage ?? 'DOOR RETREATING — SURPRISE OBSTACLES UNLEASHED!',
+                2.6,
+              );
+            }
+          }
           ex.x = Math.min(ex.def.retreatMaxX, ex.x + ex.def.retreatSpeed * dt);
           ex.legCycle += dt * 18;
           if (!ex.quipText) {
@@ -2797,11 +3075,12 @@ export class PlatformerEngine {
         }
       }
 
-      // Moving goal check (can also suddenly unlock a previously invisible hidden track!)
+      // Moving goal check (always unlocks hidden surprise obstacles/track the instant the door flees!)
       if (ex.def.moveTargets && ex.moveIndex < ex.def.moveTargets.length && !ex.moving) {
         const trigDist = ex.def.triggerDistance ?? 90;
         if (dist < trigDist) {
-          const next = ex.def.moveTargets[ex.moveIndex];
+          const stepIndex = ex.moveIndex;
+          const next = ex.def.moveTargets[stepIndex];
           ex.targetX = next.x;
           ex.targetY = next.y;
           ex.moveIndex += 1;
@@ -2809,8 +3088,9 @@ export class PlatformerEngine {
           this.setExitQuip(ex, next.quip ?? 'Nope!', 2.4);
           audioManager.playTrap();
           this.recordTrick('trap');
-          if (next.revealsTriggerId) {
-            this.unlockHiddenTrackTrigger(next.revealsTriggerId);
+          const stepTriggerId = next.revealsTriggerId ?? `__runaway_${ex.def.id}_${stepIndex}`;
+          const revealedSurprise = this.unlockHiddenTrackTrigger(stepTriggerId);
+          if (next.revealsTriggerId || revealedSurprise) {
             this.showPrankBanner(
               ex.def.fakeMessage ?? 'THOUGHT YOU WON? THE REAL TRACK JUST STARTED.',
               3.2,
@@ -3430,7 +3710,18 @@ export class PlatformerEngine {
     this.spawnDust(this.px + PLAYER_W / 2, this.py + PLAYER_H / 2, 18, '#DC2626');
     this.spawnDust(this.px + PLAYER_W / 2, this.py + PLAYER_H / 2, 14, '#111111');
 
-    this.callbacks.onDeathRecorded(this.level.id, this.levelDeaths, nextLevelStreak);
+    this.callbacks.onDeathRecorded(this.level.id, this.levelDeaths, nextLevelStreak, {
+      levelId: this.level.id,
+      cause,
+      levelDeaths: this.levelDeaths,
+      deathStreak: nextLevelStreak,
+      totalDeaths: this.totalDeathsGlobal,
+      quickDeaths: this.consecutiveQuickDeaths,
+      elapsedMs: Math.round(this.levelTime * 1000),
+      progressRatio: progress,
+      repeatObstacleCount: repeatCount,
+      streakMilestone,
+    });
     this.emitHud();
   }
 
@@ -3581,8 +3872,11 @@ export class PlatformerEngine {
       shakeY = (Math.random() * 2 - 1) * mag;
     }
 
+    // Uplift the rendered playfield slightly so the black floor & stickman sit cleanly above mobile touch buttons
+    const worldUpliftY = 52;
+
     ctx.save();
-    ctx.translate(-Math.round(this.camX) + shakeX, shakeY);
+    ctx.translate(-Math.round(this.camX) + shakeX, -worldUpliftY + shakeY);
 
     // Render order: Wind -> Signs -> Adaptive Clue -> Checkpoints -> Exits -> Platforms -> Hazards -> Fake Rewards -> Player -> Particles
     this.drawWindZones(ctx);
@@ -3591,7 +3885,7 @@ export class PlatformerEngine {
     this.drawCheckpoints(ctx);
     this.drawSwitches(ctx);
     this.drawExits(ctx);
-    this.drawPlatforms(ctx);
+    this.drawPlatforms(ctx, viewMaxY + worldUpliftY);
     this.drawHazards(ctx);
     this.drawRewards(ctx);
 
@@ -3616,7 +3910,7 @@ export class PlatformerEngine {
       const darknessFrame: DarknessRenderFrame = {
         levelId: this.level.id,
         playerScreenX: this.px + PLAYER_W / 2 - Math.round(this.camX) + shakeX,
-        playerScreenY: this.py + PLAYER_H / 2 - 4 + shakeY,
+        playerScreenY: this.py + PLAYER_H / 2 - 4 - worldUpliftY + shakeY,
         facing: this.facing,
         baseRadius: tightRadius,
         viewWidth: VIEW_WIDTH,
@@ -3630,8 +3924,20 @@ export class PlatformerEngine {
       if (this.callbacks.onRenderDarknessMask) {
         this.callbacks.onRenderDarknessMask(ctx, darknessFrame);
       } else {
-        this.drawSpotlightOverlay(ctx, tightRadius);
+        this.drawSpotlightOverlay(ctx, tightRadius, worldUpliftY);
       }
+    } else {
+      // Dynamic Canvas-based Fog of War layer obscuring distant obstacles until the player gets dangerously close
+      this.drawFogOfWarLayer(
+        ctx,
+        viewMinX,
+        viewMaxX,
+        viewMinY,
+        viewMaxY,
+        worldUpliftY,
+        shakeX,
+        shakeY,
+      );
     }
 
     // Level 100 Obsidian Arena framing: subtle crimson architectural corner ticks + act escalation rim
@@ -3854,11 +4160,15 @@ export class PlatformerEngine {
     return minDistSq === Infinity ? Infinity : Math.sqrt(minDistSq);
   }
 
-  private drawSpotlightOverlay(ctx: CanvasRenderingContext2D, radius: number): void {
+  private drawSpotlightOverlay(
+    ctx: CanvasRenderingContext2D,
+    radius: number,
+    worldUpliftY = 0,
+  ): void {
     const forwardShift = this.darknessLightBoost ? 78 : this.level.id <= 35 ? 42 : 30;
     const effRadius = this.darknessLightBoost ? radius * 1.55 : radius;
     const sx = this.px + PLAYER_W / 2 - Math.round(this.camX) + this.facing * forwardShift;
-    const sy = this.py + PLAYER_H / 2 - 4;
+    const sy = this.py + PLAYER_H / 2 - 4 - worldUpliftY;
 
     const grad = ctx.createRadialGradient(sx, sy, effRadius * 0.34, sx, sy, effRadius * 1.15);
     grad.addColorStop(0, 'rgba(2, 2, 4, 0.00)');
@@ -3867,6 +4177,135 @@ export class PlatformerEngine {
     grad.addColorStop(1, this.darknessLightBoost ? 'rgba(1, 1, 3, 0.935)' : 'rgba(1, 1, 3, 0.975)');
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, VIEW_WIDTH, VIEW_HEIGHT);
+  }
+
+  private getFogOfWarMetrics(): { clearRadius: number; fogRadius: number; forwardLead: number } {
+    const id = this.level.id;
+    if (id >= 99) {
+      return { clearRadius: 132, fogRadius: 215, forwardLead: 38 };
+    }
+    if (id >= 76) {
+      return { clearRadius: 144, fogRadius: 234, forwardLead: 42 };
+    }
+    if (id >= 46) {
+      return { clearRadius: 158, fogRadius: 256, forwardLead: 46 };
+    }
+    if (id >= 16) {
+      return { clearRadius: 174, fogRadius: 280, forwardLead: 50 };
+    }
+    return { clearRadius: 190, fogRadius: 305, forwardLead: 54 };
+  }
+
+  private drawFogOfWarLayer(
+    ctx: CanvasRenderingContext2D,
+    viewMinX: number,
+    viewMaxX: number,
+    viewMinY: number,
+    viewMaxY: number,
+    worldUpliftY: number,
+    shakeX: number,
+    shakeY: number,
+  ): void {
+    // Once victory clears the fog wide open, skip drawing the veil
+    if (this.state === 'won' && this.fogRadiusScale > 2.8) return;
+
+    const isFinale100 = this.isFinale100Theme();
+    const metrics = this.getFogOfWarMetrics();
+    const pulse = this.prefersReducedMotion ? 0 : Math.sin(this.worldTime * 2.15) * 3.5;
+
+    const clearR = Math.max(60, (metrics.clearRadius + pulse) * this.fogRadiusScale);
+    const fogR = Math.max(clearR + 55, (metrics.fogRadius + pulse) * this.fogRadiusScale);
+
+    const cx = this.px + PLAYER_W * 0.5 - Math.round(this.camX) + this.fogLeadX + shakeX;
+    const cy = this.py + PLAYER_H * 0.5 - 12 - worldUpliftY + shakeY;
+
+    const fullW = viewMaxX - viewMinX;
+    const fullH = viewMaxY - viewMinY;
+
+    ctx.save();
+
+    // Pass 1: Radial Fog of War veil matching the arena paper/obsidian backdrop
+    // Completely obscures platforms, traps, saws, spikes, signs & exits beyond fogR
+    const fogGrad = ctx.createRadialGradient(cx, cy, clearR * 0.72, cx, cy, fogR);
+    const clearStop = Math.min(0.65, clearR / fogR);
+    const mid1 = clearStop + (1 - clearStop) * 0.34;
+    const mid2 = clearStop + (1 - clearStop) * 0.72;
+
+    if (isFinale100) {
+      fogGrad.addColorStop(0, 'rgba(26, 22, 23, 0)');
+      fogGrad.addColorStop(clearStop, 'rgba(26, 22, 23, 0)');
+      fogGrad.addColorStop(mid1, 'rgba(34, 21, 23, 0.52)');
+      fogGrad.addColorStop(mid2, 'rgba(26, 22, 23, 0.92)');
+      fogGrad.addColorStop(1, 'rgba(26, 22, 23, 1)');
+    } else {
+      fogGrad.addColorStop(0, 'rgba(245, 243, 238, 0)');
+      fogGrad.addColorStop(clearStop, 'rgba(245, 243, 238, 0)');
+      fogGrad.addColorStop(mid1, 'rgba(245, 243, 238, 0.46)');
+      fogGrad.addColorStop(mid2, 'rgba(245, 243, 238, 0.90)');
+      fogGrad.addColorStop(1, 'rgba(245, 243, 238, 1)');
+    }
+
+    ctx.fillStyle = fogGrad;
+    ctx.fillRect(viewMinX, viewMinY, fullW, fullH);
+
+    // Pass 2: Subtle atmospheric mist contour along the creeping sightline boundary
+    const ringGrad = ctx.createRadialGradient(cx, cy, clearR * 0.92, cx, cy, fogR * 1.04);
+    ringGrad.addColorStop(0, 'rgba(0, 0, 0, 0)');
+    ringGrad.addColorStop(
+      0.48,
+      isFinale100 ? 'rgba(220, 38, 38, 0.13)' : 'rgba(17, 17, 17, 0.045)',
+    );
+    ringGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    ctx.fillStyle = ringGrad;
+    ctx.fillRect(viewMinX, viewMinY, fullW, fullH);
+
+    // Pass 3: Re-stamp seamless edge-to-edge drafting grid lines across the fogged periphery
+    // so obscured regions remain crisp blank graph paper rather than a flat patch
+    const gridCutoutR = clearR + (fogR - clearR) * 0.45;
+    ctx.beginPath();
+    ctx.rect(viewMinX, viewMinY, fullW, fullH);
+    ctx.arc(cx, cy, gridCutoutR, 0, Math.PI * 2, true);
+    ctx.clip('evenodd');
+
+    const gridSize = 40;
+    const phaseX = ((-this.camX * 0.35) % gridSize + gridSize) % gridSize;
+    const firstX = Math.floor((viewMinX - phaseX) / gridSize) * gridSize + phaseX;
+    const firstY = Math.floor(viewMinY / gridSize) * gridSize;
+
+    ctx.strokeStyle = isFinale100 ? 'rgba(220, 38, 38, 0.11)' : 'rgba(17, 17, 17, 0.042)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let x = firstX; x <= viewMaxX + gridSize; x += gridSize) {
+      ctx.moveTo(x, viewMinY);
+      ctx.lineTo(x, viewMaxY);
+    }
+    for (let y = firstY; y <= viewMaxY + gridSize; y += gridSize) {
+      ctx.moveTo(viewMinX, y);
+      ctx.lineTo(viewMaxX, y);
+    }
+    ctx.stroke();
+
+    if (isFinale100) {
+      const majorSize = 200;
+      const majorPhaseX = ((-this.camX * 0.35) % majorSize + majorSize) % majorSize;
+      const firstMajorX =
+        Math.floor((viewMinX - majorPhaseX) / majorSize) * majorSize + majorPhaseX;
+      const firstMajorY = Math.floor(viewMinY / majorSize) * majorSize;
+      ctx.strokeStyle = 'rgba(220, 38, 38, 0.19)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (let x = firstMajorX; x <= viewMaxX + majorSize; x += majorSize) {
+        ctx.moveTo(x, viewMinY);
+        ctx.lineTo(x, viewMaxY);
+      }
+      for (let y = firstMajorY; y <= viewMaxY + majorSize; y += majorSize) {
+        ctx.moveTo(viewMinX, y);
+        ctx.lineTo(viewMaxX, y);
+      }
+      ctx.stroke();
+    }
+
+    ctx.restore();
   }
 
   private drawBackgroundGrid(
@@ -4012,7 +4451,7 @@ export class PlatformerEngine {
     return baseH + 8;
   }
 
-  private drawPlatforms(ctx: CanvasRenderingContext2D): void {
+  private drawPlatforms(ctx: CanvasRenderingContext2D, bottomWorldY = VIEW_HEIGHT + 80): void {
     for (const p of this.platforms) {
       if (!p.revealed) continue;
       const isFallingDropTile =
@@ -4202,21 +4641,40 @@ export class PlatformerEngine {
         ctx.fillRect(p.x + ox + 4, p.y + oy + 4, p.w, visualH);
       }
 
+      // Visually hide any extended runaway-door floor beyond the exit until the door actually flees
+      let renderedW = p.w;
+      for (const gate of this.runawaySurpriseGates) {
+        if (
+          gate.hostPlatId === p.def.id &&
+          (!gate.requiredParentTrigger || this.revealedTriggers.has(gate.requiredParentTrigger)) &&
+          !this.revealedTriggers.has(gate.triggerId)
+        ) {
+          renderedW = Math.min(renderedW, Math.max(40, gate.lockMaxX - p.x));
+        }
+      }
+
+      // Extend bottom-anchored ground slabs seamlessly past the bottom of the uplifted viewport
+      const extendsToBottom =
+        isGroundSlab && p.def.y + p.def.h >= this.level.worldHeight - 20;
+      const renderedH = extendsToBottom
+        ? Math.max(visualH, Math.ceil(bottomWorldY + 60 - (p.y + oy)))
+        : visualH;
+
       // Pure matte black ink platform (obsidian pitch-black on Level 100, dark slate in Lights-Out mode)
       ctx.fillStyle = isDarkPlat ? '#1C1C22' : isFinale100 ? '#050507' : '#111111';
-      ctx.fillRect(p.x + ox - padLeft, p.y + oy, p.w + padLeft + padRight, visualH);
+      ctx.fillRect(p.x + ox - padLeft, p.y + oy, renderedW + padLeft + padRight, renderedH);
 
       // Subtle crimson contour on elevated floating blocks ONLY in Level 100 (ground floors remain 100% pure solid black)
       if (isFinale100 && !isGroundSlab) {
         ctx.strokeStyle = 'rgba(220, 38, 38, 0.35)';
         ctx.lineWidth = 1.2;
-        ctx.strokeRect(p.x + ox + 0.6, p.y + oy + 0.6, p.w - 1.2, visualH - 1.2);
+        ctx.strokeRect(p.x + ox + 0.6, p.y + oy + 0.6, renderedW - 1.2, visualH - 1.2);
       }
 
       // Subtle walkable-edge hairline ONLY in Lights-Out darkness levels (floors stay pure solid black)
       if (isDarkPlat) {
         ctx.fillStyle = 'rgba(245, 243, 238, 0.34)';
-        ctx.fillRect(p.x + ox, p.y + oy, p.w, 1.5);
+        ctx.fillRect(p.x + ox, p.y + oy, renderedW, 1.5);
       }
 
       // Surface details per platform mechanic

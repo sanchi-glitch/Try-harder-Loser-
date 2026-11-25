@@ -137,15 +137,16 @@ export function TitleScreen({
         ctx.fill();
       }
 
-      // Floor silhouette along lower horizon with offset ink drop-shadow
-      const floorY = 448;
+      // Floor silhouette along lower horizon extending seamlessly to the bottom edge
+      const floorY = 464;
+      const floorH = Math.max(120, Math.ceil(viewMaxY - floorY + 60));
       ctx.fillStyle = 'rgba(17, 17, 17, 0.1)';
-      ctx.fillRect(4, floorY + 4, 536, 120);
-      ctx.fillRect(644, floorY + 4, 340, 120);
+      ctx.fillRect(4, floorY + 4, 536, floorH);
+      ctx.fillRect(644, floorY + 4, 340, floorH);
 
       ctx.fillStyle = '#111111';
-      ctx.fillRect(0, floorY, 536, 120);
-      ctx.fillRect(640, floorY, 340, 120);
+      ctx.fillRect(0, floorY, 536, floorH);
+      ctx.fillRect(640, floorY, 340, floorH);
 
       // Cheeky floating crumble ledge over gap (slightly thicker visual height)
       const crumbleBob = Math.sin(t * 2.2) * 2.5;
@@ -212,7 +213,7 @@ export function TitleScreen({
         running = true;
         if (sx > 512 && sx < 656) {
           const jp = (sx - 512) / 144;
-          sy = floorY - Math.sin(jp * Math.PI) * 80;
+          sy = floorY - Math.sin(jp * Math.PI) * 56;
         }
       } else if (cycle < 6.4) {
         sx = 755;
@@ -224,7 +225,7 @@ export function TitleScreen({
         running = true;
         if (sx > 512 && sx < 656) {
           const jp = (sx - 512) / 144;
-          sy = floorY - Math.sin(jp * Math.PI) * 80;
+          sy = floorY - Math.sin(jp * Math.PI) * 56;
         }
       }
 
@@ -442,13 +443,13 @@ export function TitleScreen({
         </div>
       </header>
 
-      {/* Main Horizontal Home Stage — centered cleanly above the control hint & Home-only Banner */}
-      <div className="relative z-10 flex-1 min-h-0 flex flex-col items-center justify-center safe-px pb-1 sm:pb-3">
+      {/* Main Horizontal Home Stage — lifted cleanly above the bottom stickman & speech bubble diorama */}
+      <div className="relative z-10 flex-1 min-h-0 flex flex-col items-center justify-start safe-px pt-1 sm:pt-3 md:pt-5 pb-1">
         <div className="max-w-3xl w-full flex flex-col items-center text-center">
           {/* Bespoke inline SVG Title Lockup */}
           <svg
             viewBox="0 0 680 114"
-            className="w-full max-w-[300px] sm:max-w-[450px] lg:max-w-[560px] h-auto mb-0.5 sm:mb-1.5"
+            className="w-full max-w-[260px] sm:max-w-[380px] lg:max-w-[490px] h-auto mb-0.5 sm:mb-1"
             role="img"
             aria-label="Try harder, Loser!"
           >
@@ -490,12 +491,12 @@ export function TitleScreen({
             />
           </svg>
 
-          <p className="text-[11px] sm:text-sm text-[#44403C] font-medium mb-2.5 sm:mb-4 max-w-xl text-balance">
+          <p className="text-[11px] sm:text-sm text-[#44403C] font-medium mb-2 sm:mb-3 max-w-xl text-balance">
             100 levels. Zero mercy. Don&apos;t blame the game. You&apos;re just bad.
           </p>
 
           {/* Primary Single-Row Horizontal Action Strip: Play, Levels, Game Options */}
-          <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-3 mb-2 sm:mb-3.5">
+          <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-3 mb-1.5 sm:mb-2.5">
             {hasProgress ? (
               <>
                 <button
@@ -505,7 +506,7 @@ export function TitleScreen({
                     audioManager.playButtonClick();
                     onContinue();
                   }}
-                  className="inline-flex items-center gap-2 px-5 sm:px-7 py-2 sm:py-3 rounded-lg bg-[#111111] text-[#F5F3EE] font-display font-bold text-xs sm:text-base tracking-tight shadow-[3px_3px_0px_#DC2626] hover:bg-[#DC2626] hover:shadow-[3px_3px_0px_#111111] active:translate-y-0.5 transition-all cursor-pointer whitespace-nowrap shrink-0"
+                  className="inline-flex items-center gap-2 px-5 sm:px-7 py-1.5 sm:py-2.5 rounded-lg bg-[#111111] text-[#F5F3EE] font-display font-bold text-xs sm:text-base tracking-tight shadow-[3px_3px_0px_#DC2626] hover:bg-[#DC2626] hover:shadow-[3px_3px_0px_#111111] active:translate-y-0.5 transition-all cursor-pointer whitespace-nowrap shrink-0"
                 >
                   <Play className="w-3.5 h-3.5 sm:w-4 sm:h-4 fill-current" />
                   Continue · Lv {String(currentLevel.id).padStart(2, '0')}
@@ -517,7 +518,7 @@ export function TitleScreen({
                     audioManager.playButtonClick();
                     onPlay();
                   }}
-                  className="inline-flex items-center gap-1.5 px-3.5 sm:px-5 py-2 sm:py-3 rounded-lg border-2 border-[#111111] bg-[#FFFFFF] text-[#111111] font-semibold text-xs sm:text-sm hover:bg-[#111111] hover:text-[#F5F3EE] active:scale-[0.98] transition-all cursor-pointer whitespace-nowrap shrink-0"
+                  className="inline-flex items-center gap-1.5 px-3.5 sm:px-5 py-1.5 sm:py-2.5 rounded-lg border-2 border-[#111111] bg-[#FFFFFF] text-[#111111] font-semibold text-xs sm:text-sm hover:bg-[#111111] hover:text-[#F5F3EE] active:scale-[0.98] transition-all cursor-pointer whitespace-nowrap shrink-0"
                 >
                   <RotateCcw className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                   New Run
@@ -531,7 +532,7 @@ export function TitleScreen({
                   audioManager.playButtonClick();
                   onPlay();
                 }}
-                className="inline-flex items-center gap-2 px-6 sm:px-8 py-2 sm:py-3 rounded-lg bg-[#111111] text-[#F5F3EE] font-display font-bold text-xs sm:text-base tracking-tight shadow-[3px_3px_0px_#DC2626] hover:bg-[#DC2626] hover:shadow-[3px_3px_0px_#111111] active:translate-y-0.5 transition-all cursor-pointer whitespace-nowrap shrink-0"
+                className="inline-flex items-center gap-2 px-6 sm:px-8 py-1.5 sm:py-2.5 rounded-lg bg-[#111111] text-[#F5F3EE] font-display font-bold text-xs sm:text-base tracking-tight shadow-[3px_3px_0px_#DC2626] hover:bg-[#DC2626] hover:shadow-[3px_3px_0px_#111111] active:translate-y-0.5 transition-all cursor-pointer whitespace-nowrap shrink-0"
               >
                 <Play className="w-3.5 h-3.5 sm:w-4 sm:h-4 fill-current" />
                 Play Game
@@ -545,7 +546,7 @@ export function TitleScreen({
                 audioManager.playButtonClick();
                 onOpenLevels();
               }}
-              className="inline-flex items-center gap-1.5 sm:gap-2 px-4 sm:px-5 py-2 sm:py-3 rounded-lg border-2 border-[#111111] bg-[#FFFFFF] text-[#111111] font-display font-bold text-xs sm:text-sm hover:bg-[#111111] hover:text-[#F5F3EE] transition-colors cursor-pointer whitespace-nowrap shrink-0"
+              className="inline-flex items-center gap-1.5 sm:gap-2 px-4 sm:px-5 py-1.5 sm:py-2.5 rounded-lg border-2 border-[#111111] bg-[#FFFFFF] text-[#111111] font-display font-bold text-xs sm:text-sm hover:bg-[#111111] hover:text-[#F5F3EE] transition-colors cursor-pointer whitespace-nowrap shrink-0"
             >
               <Grid className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
               Levels ({completedCount}/{LEVELS.length})
@@ -558,7 +559,7 @@ export function TitleScreen({
                 audioManager.playButtonClick();
                 setMenuDrawerOpen(true);
               }}
-              className="inline-flex items-center gap-1.5 sm:gap-2 px-3.5 sm:px-4 py-2 sm:py-3 rounded-lg border-2 border-[#111111]/30 bg-[#F5F3EE]/95 text-[#111111] font-semibold text-xs sm:text-sm hover:border-[#111111] transition-colors cursor-pointer whitespace-nowrap shrink-0"
+              className="inline-flex items-center gap-1.5 sm:gap-2 px-3.5 sm:px-4 py-1.5 sm:py-2.5 rounded-lg border-2 border-[#111111]/30 bg-[#F5F3EE]/95 text-[#111111] font-semibold text-xs sm:text-sm hover:border-[#111111] transition-colors cursor-pointer whitespace-nowrap shrink-0"
             >
               <Menu className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
               Game Options
@@ -616,7 +617,7 @@ export function TitleScreen({
       {/* Bottom Home Dock: Control hint + Home-Screen-Only AdMob Banner (zero overlap with controls) */}
       <div className="relative z-20 shrink-0 flex flex-col items-center">
         <div className="text-center pointer-events-none safe-px pb-1">
-          <p className="text-[10px] sm:text-[11px] font-mono-tabular text-[#57534E]">
+          <p className="text-[10px] sm:text-[11px] font-mono-tabular text-[#A8A29E]">
             Horizontal Mode · A / D Move · Space Jump · R Restart · Esc Menu
           </p>
         </div>

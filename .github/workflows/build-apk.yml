@@ -174,6 +174,7 @@ jobs:
         env:
           ANDROID_VERSION_CODE: ${{ github.run_number }}
           ANDROID_VERSION_NAME: 1.0.${{ github.run_number }}
+          ADMOB_APP_ID: ${{ secrets.ADMOB_APP_ID }}
         shell: bash
         run: |
           gradle :app:bundleRelease :app:assembleDebug --stacktrace --no-daemon

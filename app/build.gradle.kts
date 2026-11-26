@@ -39,11 +39,15 @@ android {
     buildTypes {
         getByName("debug") {
             signingConfig = signingConfigs.getByName("debug")
+            manifestPlaceholders["admobAppId"] = "ca-app-pub-3940256099942544~3347511713"
         }
         getByName("release") {
             isDebuggable = false
             isMinifyEnabled = false
             isShrinkResources = false
+            manifestPlaceholders["admobAppId"] =
+                System.getenv("ADMOB_APP_ID")?.takeIf { it.isNotBlank() }
+                    ?: "ca-app-pub-3940256099942544~3347511713"
             val releaseSigning = signingConfigs.getByName("release")
             if (releaseSigning.storeFile != null) {
                 signingConfig = releaseSigning
@@ -59,4 +63,5 @@ android {
 
 dependencies {
     implementation(libs.androidx.webkit)
+    implementation(libs.play.services.ads)
 }

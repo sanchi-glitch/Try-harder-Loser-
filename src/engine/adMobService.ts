@@ -67,6 +67,8 @@ export interface AdMobUiState {
 
 interface NativeAndroidAdMobBridge {
   initialize?: (isTesting: boolean) => void;
+  isInterstitialReady?: () => boolean;
+  isRewardedReady?: () => boolean;
   preloadInterstitial?: (adUnitId: string) => void;
   showInterstitial?: (adUnitId: string) => void;
   preloadRewarded?: (adUnitId: string) => void;
@@ -457,13 +459,12 @@ class AdMobService {
 
     // Path A: Native Android WebView Google Mobile Ads SDK bridge
     if (androidBridge?.showInterstitial) {
-      if (!this.interstitialLoaded) {
-        void this.preloadInterstitial();
-        return { shown: false, reason: 'unavailable' };
+      if (androidBridge.isInterstitialReady?.()) {
+        this.interstitialLoaded = true;
       }
       this.isShowingFullscreenAd = true;
       this.lastInterstitialCompletedLevelId = completedLevelId;
-      return withTimeout(
+      const result = await withTimeout<InterstitialResult>(
         new Promise<InterstitialResult>((resolve) => {
           this.pendingInterstitialResolve = resolve;
           try {
@@ -477,6 +478,14 @@ class AdMobService {
         45_000,
         { shown: false, reason: 'unavailable' },
       );
+      if (!result.shown) {
+        this.pendingInterstitialResolve = null;
+        this.isShowingFullscreenAd = false;
+        this.lastInterstitialCompletedLevelId = null;
+        // Retry on the next forward level transition instead of wasting the cadence slot
+        this.completedLevelsSinceLastInterstitial = Math.max(0, INTERSTITIAL_LEVEL_INTERVAL - 1);
+      }
+      return result;
     }
 
     // Path B: Official Capacitor AdMob plugin (Android Mobile Ads SDK)
@@ -619,9 +628,12 @@ class AdMobService {
 
     // Path A: Native Android WebView Google Mobile Ads SDK bridge
     if (androidBridge?.showRewarded) {
+      if (androidBridge.isRewardedReady?.()) {
+        this.rewardedLoaded = true;
+      }
       this.isShowingFullscreenAd = true;
       this.nativeRewardEarnedFlag = false;
-      return withTimeout(
+      const result = await withTimeout<RewardedAdResult>(
         new Promise<RewardedAdResult>((resolve) => {
           this.pendingRewardedResolve = resolve;
           try {
@@ -635,6 +647,12 @@ class AdMobService {
         65_000,
         { rewarded: false, reason: 'unavailable' },
       );
+      if (this.pendingRewardedResolve) {
+        this.pendingRewardedResolve = null;
+        this.isShowingFullscreenAd = false;
+        this.nativeRewardEarnedFlag = false;
+      }
+      return result;
     }
 
     // Path B: Official Capacitor AdMob plugin (Android Mobile Ads SDK)

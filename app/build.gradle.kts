@@ -3,11 +3,11 @@ plugins {
 }
 
 android {
-    namespace = "com.tryharderloser.game"
+    namespace = "com.sanvex.game.tryharderloser"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.tryharderloser.game"
+        applicationId = "com.sanvex.game.tryharderloser"
         minSdk = 24
         targetSdk = 35
         versionCode = System.getenv("ANDROID_VERSION_CODE")?.toIntOrNull() ?: 1

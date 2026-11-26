@@ -151,7 +151,7 @@ jobs:
               -storepass tryharderrelease \
               -alias upload \
               -keypass tryharderrelease \
-              -dname "CN=Try Harder Loser,OU=Game,O=TryHarderLoser,C=US" \
+              -dname "CN=Try Harder Loser,OU=Game,O=Sanvex,C=US" \
               -keyalg RSA \
               -keysize 2048 \
               -validity 10000 >/dev/null 2>&1
@@ -209,8 +209,21 @@ jobs:
             echo "::error::Release AAB is missing signing certificate under META-INF/."
             exit 1
           fi
+          MANIFEST_BIN="$(mktemp)"
+          unzip -p "$EXPECTED_AAB" base/manifest/AndroidManifest.xml > "$MANIFEST_BIN"
+          if ! grep -aq 'com.sanvex.game.tryharderloser' "$MANIFEST_BIN"; then
+            echo "::error::Release AAB manifest does not contain expected package ID com.sanvex.game.tryharderloser."
+            rm -f "$MANIFEST_BIN"
+            exit 1
+          fi
+          if grep -aq 'com.tryharderloser.game' "$MANIFEST_BIN"; then
+            echo "::error::Release AAB manifest still references old package ID com.tryharderloser.game."
+            rm -f "$MANIFEST_BIN"
+            exit 1
+          fi
+          rm -f "$MANIFEST_BIN"
           AAB_BYTES="$(wc -c < "$EXPECTED_AAB" | tr -d '[:space:]')"
-          echo "Verified signed release AAB: ${EXPECTED_AAB} (${AAB_BYTES} bytes)"
+          echo "Verified signed release AAB (com.sanvex.game.tryharderloser): ${EXPECTED_AAB} (${AAB_BYTES} bytes)"
 
           EXPECTED_APK="app/build/outputs/apk/debug/app-debug.apk"
           if [ ! -e "$EXPECTED_APK" ]; then
@@ -312,11 +325,12 @@ jobs:
           Automatically generated Android Release AAB and Debug APK built using GitHub Actions.
 
           - Game name: Try Harder, Loser
+          - Application ID / Package name: \`com.sanvex.game.tryharderloser\`
           - Version: 1.0.${GITHUB_RUN_NUMBER} (versionCode ${GITHUB_RUN_NUMBER})
           - Workflow run number: ${GITHUB_RUN_NUMBER}
           - Workflow run attempt: ${GITHUB_RUN_ATTEMPT}
           - Source commit SHA: ${GITHUB_SHA}
-          - Artifacts: \`app-release.aab\` (Release Android App Bundle, non-debuggable) and \`app-debug.apk\` (Debug APK for direct device sideloading)
+          - Artifacts: \`app-release.aab\` (Release Android App Bundle, non-debuggable, Play Console ready) and \`app-debug.apk\` (Debug APK for direct device sideloading)
           - Release AAB Signing: ${SIGNING_NOTE}
           EOF
           )"
@@ -335,6 +349,36 @@ jobs:
             done
           }
 
+          upload_asset() {
+            local tag="$1"
+            local file_path="$2"
+            local asset_name
+            asset_name="$(basename "$file_path")"
+            local expected_bytes
+            expected_bytes="$(wc -c < "$file_path" | tr -d '[:space:]')"
+            local max_attempts=4
+            local attempt=1
+            while [ "$attempt" -le "$max_attempts" ]; do
+              if gh release upload "$tag" "$file_path" --clobber; then
+                return 0
+              fi
+              local remote_bytes
+              remote_bytes="$(gh release view "$tag" --json assets --jq ".assets[] | select(.name == \"${asset_name}\" and .state == \"uploaded\") | .size" 2>/dev/null || true)"
+              if [ "$remote_bytes" = "$expected_bytes" ]; then
+                echo "Verified ${asset_name} (${remote_bytes} bytes) is uploaded on release ${tag}."
+                return 0
+              fi
+              if [ "$attempt" -ge "$max_attempts" ]; then
+                echo "::error::Failed to upload ${asset_name} after ${max_attempts} attempts."
+                return 1
+              fi
+              local wait_s=$((attempt * 5))
+              echo "::warning::Upload attempt ${attempt}/${max_attempts} for ${asset_name} failed; retrying in ${wait_s}s..."
+              attempt=$((attempt + 1))
+              sleep "$wait_s"
+            done
+          }
+
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             retry gh release create "$RELEASE_TAG" \
               --target "$GITHUB_SHA" \
@@ -343,8 +387,9 @@ jobs:
               --latest
           fi
 
-          retry gh release upload "$RELEASE_TAG" "$PREPARED_AAB" --clobber
-          retry gh release upload "$RELEASE_TAG" "$PREPARED_APK" --clobber
+          upload_asset "$RELEASE_TAG" "$PREPARED_AAB"
+          sleep 3
+          upload_asset "$RELEASE_TAG" "$PREPARED_APK"
 
           UPLOADED_ASSETS="$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name')"
           echo "Published release assets:"

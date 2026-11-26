@@ -1,4 +1,4 @@
-package com.tryharderloser.game;
+package com.sanvex.game.tryharderloser;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;

@@ -16,7 +16,7 @@
         android:theme="@style/Theme.TryHarderLoser">
 
         <activity
-            android:name=".MainActivity"
+            android:name="com.sanvex.game.tryharderloser.MainActivity"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize|uiMode|density"
             android:exported="true"
             android:hardwareAccelerated="true"
